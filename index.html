@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+  <title>QuickMemo</title>
+</head>
+<body>
+  <!-- List View -->
+  <div id="list-view" class="view">
+    <header class="header">
+      <h1 class="header__title">QuickMemo</h1>
+      <button id="export-btn" class="header__action" aria-label="Export">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="10" cy="4" r="1.5"/>
+          <circle cx="10" cy="10" r="1.5"/>
+          <circle cx="10" cy="16" r="1.5"/>
+        </svg>
+      </button>
+    </header>
+    <div class="tabs">
+      <button class="tab tab--active" data-tab="active">Active</button>
+      <button class="tab" data-tab="archived">Archive</button>
+    </div>
+    <div id="memo-list" class="memo-list"></div>
+    <div id="empty-state" class="empty-state" hidden>
+      <p class="empty-state__text"></p>
+    </div>
+    <button id="fab" class="fab" aria-label="New memo">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Edit View -->
+  <div id="edit-view" class="view view-editor">
+    <header class="header">
+      <button id="back-btn" class="header__action" aria-label="Back">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="12,4 6,10 12,16"/>
+        </svg>
+      </button>
+      <div class="header__spacer"></div>
+      <div id="save-indicator" class="save-indicator" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3,8 7,12 13,4"/>
+        </svg>
+      </div>
+      <button id="copy-btn-editor" class="header__action" aria-label="Copy">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="6" y="6" width="10" height="11" rx="1.5"/>
+          <path d="M4 14V4.5A1.5 1.5 0 015.5 3H13"/>
+        </svg>
+      </button>
+    </header>
+    <textarea id="editor-textarea" class="editor-textarea" placeholder="Start writing..."></textarea>
+    <div class="markdown-toolbar">
+      <button class="markdown-key" data-insert="heading">#</button>
+      <button class="markdown-key" data-insert="list">-</button>
+      <button class="markdown-key" data-insert="quote">&gt;</button>
+      <button class="markdown-key" data-insert="code">`</button>
+      <button class="markdown-key" data-insert="bold">*</button>
+      <button class="markdown-key" data-insert="newline">&crarr;</button>
+      <button class="markdown-key" data-insert="tab">tab</button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span id="toast-message" class="toast__message"></span>
+    <button id="toast-action" class="toast__action" hidden></button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

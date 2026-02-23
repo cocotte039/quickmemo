@@ -1,42 +1,53 @@
 # QuickMemo
 
-スマホで Claude Code への指示を下書きするための軽量メモ PWA。
+A lightweight, offline-first memo PWA. No server, no account — your notes stay in your browser.
 
-## 特徴
+**[Try it](https://cocotte039.github.io/quickmemo/)**
 
-- ダークテーマ（GitHub Dark 系）+ 等幅フォント
-- Markdown 補助キー（`#` `-` `>` `` ` `` `*`）
-- 自動保存（500ms デバウンス）
-- 左スワイプでアーカイブ / 削除
-- 全文コピー（一覧・編集画面の両方から）
-- 元に戻すトースト（誤操作防止）
-- JSON エクスポート（バックアップ）
-- オフライン対応（Service Worker）
+## Features
 
-## セットアップ
+- **Offline-first** — Works without internet via Service Worker
+- **Auto-save** — Saves as you type (500ms debounce)
+- **Swipe actions** — Swipe left to archive; swipe left in Archive to delete
+- **Undo** — Toast with undo button on archive/delete
+- **Markdown toolbar** — Quick-insert `#`, `-`, `>`, `` ` ``, `**`
+- **Copy** — One-tap copy from list or editor
+- **JSON export** — Backup all notes as a downloadable file
+- **Installable** — Add to home screen for a standalone app experience
+- **Dark theme** — GitHub-dark inspired palette with monospace editor
 
-### 1. GitHub Pages を有効にする
+## Privacy
 
-1. リポジトリの **Settings** → **Pages** を開く
-2. **Source**: `Deploy from a branch`
-3. **Branch**: `main` / `/ (root)` を選択して **Save**
-4. 数分後に `https://<username>.github.io/quickmemo/` で公開される
+All data is stored in your browser's `localStorage`. **Nothing is sent to any server.** The source code is public, but your notes are completely private to your device.
 
-### 2. スマホにインストールする
+## Setup
 
-1. Chrome で上記 URL を開く
-2. アドレスバーの「ホーム画面に追加」またはメニューから「アプリをインストール」をタップ
-3. ホーム画面にアイコンが追加され、ネイティブアプリのように起動できる
+### 1. Enable GitHub Pages
 
-> APK（ネイティブアプリ）ではなく PWA です。ブラウザ上で動作しますが、インストールするとアドレスバーなしのスタンドアロン表示になります。アプリの更新は `git push` するだけで自動反映されます。
+1. Go to your repo **Settings** → **Pages**
+2. **Source**: Deploy from a branch
+3. **Branch**: `main` / `/ (root)` → **Save**
+4. Access at `https://<username>.github.io/quickmemo/`
 
-## 技術スタック
+### 2. Install on your phone
 
-- HTML / CSS / JS（フレームワークなし）
-- localStorage（データはブラウザ内に保存）
-- Service Worker（Cache First 戦略）
-- GitHub Pages（ホスティング）
+1. Open the URL in Chrome (or Safari on iOS)
+2. Tap **"Add to Home Screen"** or **"Install App"**
+3. Launch from the home screen icon — runs without the browser address bar
 
-## データについて
+> This is a PWA, not a native app. Updates are deployed by `git push` and picked up automatically.
 
-メモは端末のブラウザ内（localStorage）に保存されます。クラウド同期はありません。ブラウザの「閲覧データを削除」でデータが消える可能性があるため、定期的にエクスポート機能でバックアップを取ってください。
+## Tech Stack
+
+- HTML / CSS / Vanilla JS (no frameworks, no build step)
+- `localStorage` for persistence
+- Service Worker (cache-first strategy)
+- GitHub Pages for hosting
+
+## Data & Backup
+
+Notes live only in your browser's `localStorage`. There is no cloud sync. Clearing browser data will delete your notes — use the **Export** button regularly to back up as JSON.
+
+## License
+
+[MIT](LICENSE)

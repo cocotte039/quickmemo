@@ -376,10 +376,14 @@ button {
 /* === Empty state === */
 .empty-state {
   flex: 1;
-  display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-8);
+  display: none;
+}
+
+.empty-state--visible {
+  display: flex;
 }
 
 .empty-state__text {

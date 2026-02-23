@@ -130,14 +130,14 @@ function renderList() {
   updateArchiveBadge();
 
   if (notes.length === 0) {
-    emptyStateEl.hidden = false;
+    emptyStateEl.classList.add('empty-state--visible');
     emptyText.textContent = currentTab === 'active'
       ? 'No memos yet. Tap + to create one.'
-      : 'アーカイブは空です';
+      : 'No archived memos.';
     return;
   }
 
-  emptyStateEl.hidden = true;
+  emptyStateEl.classList.remove('empty-state--visible');
 
   // Track pin transition for divider
   let lastWasPinned = false;
@@ -497,12 +497,12 @@ function deleteNote(id) {
 function updateEmptyState() {
   const notes = getFilteredNotes();
   if (notes.length === 0) {
-    emptyStateEl.hidden = false;
+    emptyStateEl.classList.add('empty-state--visible');
     emptyText.textContent = currentTab === 'active'
       ? 'No memos yet. Tap + to create one.'
-      : 'アーカイブは空です';
+      : 'No archived memos.';
   } else {
-    emptyStateEl.hidden = true;
+    emptyStateEl.classList.remove('empty-state--visible');
   }
 }
 

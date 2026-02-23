@@ -24,6 +24,14 @@
   --border:         #30363d;
   --border-subtle:  #21262d;
 
+  /* Memo colors */
+  --memo-color-none:   transparent;
+  --memo-color-blue:   #3b82a0;
+  --memo-color-green:  #4a9e6e;
+  --memo-color-amber:  #b08a3e;
+  --memo-color-rose:   #a0606a;
+  --memo-color-purple: #7e6ba4;
+
   /* Font families */
   --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas',
                'Noto Sans Mono CJK JP', 'Source Han Code JP', monospace;
@@ -192,6 +200,12 @@ button {
   border-bottom-color: var(--accent);
 }
 
+.tab__badge {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin-left: var(--space-1);
+}
+
 /* === Memo list === */
 .memo-list {
   flex: 1;
@@ -305,6 +319,60 @@ button {
   color: var(--color-success);
 }
 
+/* Memo item action button (restore) */
+.memo-item__restore {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.375rem;
+  color: var(--text-secondary);
+}
+
+.memo-item__restore:active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Memo item colors (left border) */
+.memo-item--color-blue   { border-left: 3px solid var(--memo-color-blue); }
+.memo-item--color-green  { border-left: 3px solid var(--memo-color-green); }
+.memo-item--color-amber  { border-left: 3px solid var(--memo-color-amber); }
+.memo-item--color-rose   { border-left: 3px solid var(--memo-color-rose); }
+.memo-item--color-purple { border-left: 3px solid var(--memo-color-purple); }
+
+/* Pin icon in list */
+.memo-item__pin {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  margin-right: var(--space-1);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.memo-item__title-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--space-1);
+  overflow: hidden;
+}
+
+.memo-item__title-row .memo-item__title {
+  margin-bottom: 0;
+}
+
+/* Pin divider between pinned and unpinned groups */
+.memo-list__pin-divider {
+  height: 1px;
+  background: var(--border);
+  margin: var(--space-1) var(--space-4);
+}
+
 /* === Empty state === */
 .empty-state {
   flex: 1;
@@ -344,6 +412,132 @@ button {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
+/* === Editor title === */
+.editor-title {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  padding-bottom: var(--space-2);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  outline: none;
+  caret-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.editor-title::placeholder {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+/* === Pin button active === */
+.header__pin--active {
+  color: var(--accent);
+}
+
+/* === Color picker === */
+.color-picker-wrapper {
+  position: relative;
+}
+
+.header__color {
+  position: relative;
+}
+
+.color-dot-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  border: 1.5px solid var(--text-secondary);
+}
+
+.color-dot-indicator--none {
+  background: transparent;
+  border-color: var(--text-secondary);
+}
+
+.color-dot-indicator--blue   { background: var(--memo-color-blue); border-color: var(--memo-color-blue); }
+.color-dot-indicator--green  { background: var(--memo-color-green); border-color: var(--memo-color-green); }
+.color-dot-indicator--amber  { background: var(--memo-color-amber); border-color: var(--memo-color-amber); }
+.color-dot-indicator--rose   { background: var(--memo-color-rose); border-color: var(--memo-color-rose); }
+.color-dot-indicator--purple { background: var(--memo-color-purple); border-color: var(--memo-color-purple); }
+
+.color-picker {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+}
+
+.color-dot {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.color-dot--none {
+  background: var(--bg-surface);
+  border-color: var(--border);
+}
+
+.color-dot--blue   { background: var(--memo-color-blue); }
+.color-dot--green  { background: var(--memo-color-green); }
+.color-dot--amber  { background: var(--memo-color-amber); }
+.color-dot--rose   { background: var(--memo-color-rose); }
+.color-dot--purple { background: var(--memo-color-purple); }
+
+.color-dot--selected {
+  border-color: var(--text-primary);
+}
+
+/* === Dropdown menu === */
+.dropdown-wrapper {
+  position: relative;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 10rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+  overflow: hidden;
+}
+
+.dropdown-menu__item {
+  display: block;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.dropdown-menu__item:active {
+  background: var(--bg-hover);
+}
+
 /* === Editor === */
 .editor-textarea {
   width: 100%;
@@ -364,11 +558,11 @@ button {
   color: var(--text-tertiary);
 }
 
-/* === Markdown toolbar === */
+/* === Markdown toolbar (Termux Extra Keys style) === */
 .markdown-toolbar {
   display: flex;
-  gap: 0.375rem;
-  padding: var(--space-2) var(--space-3);
+  gap: 0;
+  padding: 0;
   background: var(--bg-elevated);
   border-top: 1px solid var(--border-subtle);
   overflow-x: auto;
@@ -382,11 +576,13 @@ button {
 }
 
 .markdown-key {
-  min-width: 2.75rem;
-  height: 2.25rem;
-  border-radius: 0.375rem;
+  flex: 1;
+  min-width: 0;
+  height: 2.75rem;
+  border-radius: 0;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
+  border: none;
+  border-right: 1px solid var(--border-subtle);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: var(--text-base);
@@ -396,10 +592,13 @@ button {
   flex-shrink: 0;
 }
 
+.markdown-key:last-child {
+  border-right: none;
+}
+
 .markdown-key:active {
   background: var(--bg-hover);
-  transform: scale(0.95);
-  transition: transform 50ms ease;
+  color: var(--accent);
 }
 
 /* === Toast === */

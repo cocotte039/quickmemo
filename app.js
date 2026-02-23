@@ -8,6 +8,7 @@ const STORAGE_KEY = 'quickmemo_data';
 const DEBOUNCE_MS = 500;
 const SWIPE_THRESHOLD = 80;
 const SWIPE_ANGLE_LIMIT = 30; // degrees
+const VALID_COLORS = ['blue', 'green', 'amber', 'rose', 'purple'];
 
 // --- State ---
 let data = { version: 1, notes: [] };
@@ -23,16 +24,24 @@ const editView      = document.getElementById('edit-view');
 const memoListEl    = document.getElementById('memo-list');
 const emptyStateEl  = document.getElementById('empty-state');
 const emptyText     = emptyStateEl.querySelector('.empty-state__text');
+const editorTitle   = document.getElementById('editor-title');
 const editorTextarea = document.getElementById('editor-textarea');
 const fab           = document.getElementById('fab');
 const backBtn       = document.getElementById('back-btn');
+const menuBtn       = document.getElementById('menu-btn');
+const dropdownMenu  = document.getElementById('dropdown-menu');
 const exportBtn     = document.getElementById('export-btn');
 const copyBtnEditor = document.getElementById('copy-btn-editor');
+const pinBtn        = document.getElementById('pin-btn');
+const colorBtn      = document.getElementById('color-btn');
+const colorDotIndicator = document.getElementById('color-dot-indicator');
+const colorPicker   = document.getElementById('color-picker');
 const saveIndicator = document.getElementById('save-indicator');
 const toastEl       = document.getElementById('toast');
 const toastMessage  = document.getElementById('toast-message');
 const toastAction   = document.getElementById('toast-action');
 const tabs          = document.querySelectorAll('.tab');
+const archiveBadge  = document.getElementById('archive-badge');
 
 // ============================================================
 // Storage
@@ -65,17 +74,21 @@ function saveData() {
 // Note helpers
 // ============================================================
 
-function getTitle(note) {
-  if (!note.body) return '';
-  const firstLine = note.body.split('\n')[0].trim();
-  return firstLine;
+function getDisplayTitle(note) {
+  if (note.title) return note.title;
+  if (note.body) {
+    const firstLine = note.body.split('\n')[0].trim();
+    if (firstLine) return firstLine;
+  }
+  return 'Untitled';
 }
 
 function getPreview(note) {
   if (!note.body) return '';
   const lines = note.body.split('\n');
-  // Skip first line (title), return next lines
-  return lines.slice(1).join('\n').trim();
+  // If note has a title field, show from line 0; otherwise skip first line (used as display title)
+  const startLine = note.title ? 0 : 1;
+  return lines.slice(startLine).join('\n').trim();
 }
 
 function formatDate(isoStr) {
@@ -86,9 +99,24 @@ function formatDate(isoStr) {
 
 function getFilteredNotes() {
   const isArchived = currentTab === 'archived';
-  return data.notes
-    .filter((n) => n.archived === isArchived)
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  const filtered = data.notes.filter((n) => n.archived === isArchived);
+
+  if (isArchived) {
+    // Archive tab: sort by updatedAt only (no pin sorting)
+    return filtered.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  }
+
+  // Active tab: pinned first, then by updatedAt
+  return filtered.sort((a, b) => {
+    const aPinned = a.pinned === true ? 1 : 0;
+    const bPinned = b.pinned === true ? 1 : 0;
+    if (bPinned !== aPinned) return bPinned - aPinned;
+    return new Date(b.updatedAt) - new Date(a.updatedAt);
+  });
+}
+
+function getValidColor(color) {
+  return VALID_COLORS.includes(color) ? color : null;
 }
 
 // ============================================================
@@ -99,17 +127,39 @@ function renderList() {
   memoListEl.textContent = '';
   const notes = getFilteredNotes();
 
+  updateArchiveBadge();
+
   if (notes.length === 0) {
     emptyStateEl.hidden = false;
     emptyText.textContent = currentTab === 'active'
       ? 'No memos yet. Tap + to create one.'
-      : 'No archived memos.';
+      : 'アーカイブは空です';
     return;
   }
 
   emptyStateEl.hidden = true;
 
+  // Track pin transition for divider
+  let lastWasPinned = false;
+  let needsDivider = false;
+
+  if (currentTab === 'active') {
+    const hasPinned = notes.some((n) => n.pinned === true);
+    const hasUnpinned = notes.some((n) => n.pinned !== true);
+    needsDivider = hasPinned && hasUnpinned;
+  }
+
   notes.forEach((note) => {
+    const isPinned = note.pinned === true;
+
+    // Insert divider between pinned and unpinned groups
+    if (currentTab === 'active' && needsDivider && lastWasPinned && !isPinned) {
+      const divider = document.createElement('div');
+      divider.className = 'memo-list__pin-divider';
+      memoListEl.appendChild(divider);
+    }
+    lastWasPinned = isPinned;
+
     const wrapper = document.createElement('div');
     wrapper.className = 'memo-item-wrapper';
 
@@ -131,16 +181,51 @@ function renderList() {
     item.className = 'memo-item';
     item.dataset.id = note.id;
 
-    const title = getTitle(note);
+    // Apply color class
+    const noteColor = getValidColor(note.color);
+    if (noteColor) {
+      item.classList.add('memo-item--color-' + noteColor);
+    }
+
+    // Title row (with optional pin icon)
+    const titleRow = document.createElement('div');
+    titleRow.className = 'memo-item__title-row';
+
+    if (currentTab === 'active' && isPinned) {
+      const pinIcon = document.createElement('span');
+      pinIcon.className = 'memo-item__pin';
+      const pinSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      pinSvg.setAttribute('width', '14');
+      pinSvg.setAttribute('height', '14');
+      pinSvg.setAttribute('viewBox', '0 0 24 24');
+      pinSvg.setAttribute('fill', 'none');
+      pinSvg.setAttribute('stroke', 'currentColor');
+      pinSvg.setAttribute('stroke-width', '1.5');
+      pinSvg.setAttribute('stroke-linecap', 'round');
+      pinSvg.setAttribute('stroke-linejoin', 'round');
+      const pinPath1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pinPath1.setAttribute('d', 'M12 2l0 5');
+      const pinPath2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pinPath2.setAttribute('d', 'M6 7h12l-1.5 8H7.5L6 7z');
+      const pinPath3 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pinPath3.setAttribute('d', 'M12 15l0 7');
+      pinSvg.appendChild(pinPath1);
+      pinSvg.appendChild(pinPath2);
+      pinSvg.appendChild(pinPath3);
+      pinIcon.appendChild(pinSvg);
+      titleRow.appendChild(pinIcon);
+    }
+
+    const displayTitle = getDisplayTitle(note);
     const titleEl = document.createElement('div');
     titleEl.className = 'memo-item__title';
-    if (title) {
-      titleEl.textContent = title;
-    } else {
-      titleEl.className += ' memo-item__title--empty';
-      titleEl.textContent = 'Untitled';
+    if (displayTitle === 'Untitled') {
+      titleEl.classList.add('memo-item__title--empty');
     }
-    item.appendChild(titleEl);
+    titleEl.textContent = displayTitle;
+    titleRow.appendChild(titleEl);
+
+    item.appendChild(titleRow);
 
     const preview = getPreview(note);
     if (preview) {
@@ -155,37 +240,68 @@ function renderList() {
     dateEl.textContent = formatDate(note.updatedAt);
     item.appendChild(dateEl);
 
-    // Copy button
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'memo-item__copy';
-    copyBtn.setAttribute('aria-label', 'Copy');
-    const copySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    copySvg.setAttribute('width', '18');
-    copySvg.setAttribute('height', '18');
-    copySvg.setAttribute('viewBox', '0 0 20 20');
-    copySvg.setAttribute('fill', 'none');
-    copySvg.setAttribute('stroke', 'currentColor');
-    copySvg.setAttribute('stroke-width', '1.5');
-    copySvg.setAttribute('stroke-linecap', 'round');
-    copySvg.setAttribute('stroke-linejoin', 'round');
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('x', '6');
-    rect.setAttribute('y', '6');
-    rect.setAttribute('width', '10');
-    rect.setAttribute('height', '11');
-    rect.setAttribute('rx', '1.5');
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', 'M4 14V4.5A1.5 1.5 0 015.5 3H13');
-    copySvg.appendChild(rect);
-    copySvg.appendChild(path);
-    copyBtn.appendChild(copySvg);
+    // Action button: restore for archived, copy for active
+    if (currentTab === 'archived') {
+      const restoreBtn = document.createElement('button');
+      restoreBtn.className = 'memo-item__restore';
+      restoreBtn.setAttribute('aria-label', 'Restore');
+      const restoreSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      restoreSvg.setAttribute('width', '18');
+      restoreSvg.setAttribute('height', '18');
+      restoreSvg.setAttribute('viewBox', '0 0 20 20');
+      restoreSvg.setAttribute('fill', 'none');
+      restoreSvg.setAttribute('stroke', 'currentColor');
+      restoreSvg.setAttribute('stroke-width', '1.5');
+      restoreSvg.setAttribute('stroke-linecap', 'round');
+      restoreSvg.setAttribute('stroke-linejoin', 'round');
+      // Undo arrow icon
+      const restorePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      restorePath.setAttribute('d', 'M4 7h8a4 4 0 110 8H9');
+      const restoreArrow = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      restoreArrow.setAttribute('points', '7,4 4,7 7,10');
+      restoreSvg.appendChild(restorePath);
+      restoreSvg.appendChild(restoreArrow);
+      restoreBtn.appendChild(restoreSvg);
 
-    copyBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      copyText(note.body, copyBtn);
-    });
+      restoreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        unarchiveNote(note.id);
+      });
 
-    item.appendChild(copyBtn);
+      item.appendChild(restoreBtn);
+    } else {
+      // Copy button
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'memo-item__copy';
+      copyBtn.setAttribute('aria-label', 'Copy');
+      const copySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      copySvg.setAttribute('width', '18');
+      copySvg.setAttribute('height', '18');
+      copySvg.setAttribute('viewBox', '0 0 20 20');
+      copySvg.setAttribute('fill', 'none');
+      copySvg.setAttribute('stroke', 'currentColor');
+      copySvg.setAttribute('stroke-width', '1.5');
+      copySvg.setAttribute('stroke-linecap', 'round');
+      copySvg.setAttribute('stroke-linejoin', 'round');
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', '6');
+      rect.setAttribute('y', '6');
+      rect.setAttribute('width', '10');
+      rect.setAttribute('height', '11');
+      rect.setAttribute('rx', '1.5');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M4 14V4.5A1.5 1.5 0 015.5 3H13');
+      copySvg.appendChild(rect);
+      copySvg.appendChild(path);
+      copyBtn.appendChild(copySvg);
+
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        copyText(note.body, copyBtn);
+      });
+
+      item.appendChild(copyBtn);
+    }
 
     // Tap to edit
     item.addEventListener('click', () => {
@@ -199,6 +315,20 @@ function renderList() {
 
     memoListEl.appendChild(wrapper);
   });
+}
+
+// ============================================================
+// Archive badge
+// ============================================================
+
+function updateArchiveBadge() {
+  const archivedCount = data.notes.filter((n) => n.archived === true).length;
+  if (archivedCount > 0) {
+    archiveBadge.textContent = '(' + archivedCount + ')';
+    archiveBadge.hidden = false;
+  } else {
+    archiveBadge.hidden = true;
+  }
 }
 
 // ============================================================
@@ -315,7 +445,7 @@ function setupSwipe(wrapper, itemEl, note) {
 }
 
 // ============================================================
-// Archive / Delete with Undo
+// Archive / Delete / Unarchive with Undo
 // ============================================================
 
 function archiveNote(id) {
@@ -334,6 +464,18 @@ function archiveNote(id) {
   });
 
   updateEmptyState();
+}
+
+function unarchiveNote(id) {
+  const note = data.notes.find((n) => n.id === id);
+  if (!note) return;
+
+  note.archived = false;
+  note.updatedAt = new Date().toISOString();
+  saveData();
+
+  showToast('Restored', 'success', 3000);
+  renderList();
 }
 
 function deleteNote(id) {
@@ -358,7 +500,7 @@ function updateEmptyState() {
     emptyStateEl.hidden = false;
     emptyText.textContent = currentTab === 'active'
       ? 'No memos yet. Tap + to create one.'
-      : 'No archived memos.';
+      : 'アーカイブは空です';
   } else {
     emptyStateEl.hidden = true;
   }
@@ -449,7 +591,14 @@ function openEditor(id) {
   const note = data.notes.find((n) => n.id === id);
   if (!note) return;
 
+  editorTitle.value = note.title || '';
   editorTextarea.value = note.body;
+
+  // Update pin button state
+  updatePinButtonState(note.pinned === true);
+
+  // Update color indicator
+  updateColorIndicator(getValidColor(note.color));
 
   // Transition
   editView.classList.add('view-editor--active');
@@ -472,6 +621,9 @@ function closeEditor() {
     saveCurrentNote();
   }
 
+  // Close any open pickers
+  colorPicker.hidden = true;
+
   editView.classList.remove('view-editor--active');
   listView.classList.remove('view-list--behind');
   currentNoteId = null;
@@ -483,9 +635,20 @@ function saveCurrentNote() {
   const note = data.notes.find((n) => n.id === currentNoteId);
   if (!note) return;
 
+  const newTitle = editorTitle.value;
   const newBody = editorTextarea.value;
+  let changed = false;
+
+  if (note.title !== newTitle) {
+    note.title = newTitle;
+    changed = true;
+  }
   if (note.body !== newBody) {
     note.body = newBody;
+    changed = true;
+  }
+
+  if (changed) {
     note.updatedAt = new Date().toISOString();
     saveData();
     flashSaveIndicator();
@@ -499,12 +662,125 @@ function flashSaveIndicator() {
   }, 1500);
 }
 
-// Auto-save with debounce
+// Auto-save with debounce (textarea)
 editorTextarea.addEventListener('input', () => {
   clearTimeout(saveTimerId);
   saveTimerId = setTimeout(() => {
     saveCurrentNote();
   }, DEBOUNCE_MS);
+});
+
+// Auto-save with debounce (title)
+editorTitle.addEventListener('input', () => {
+  clearTimeout(saveTimerId);
+  saveTimerId = setTimeout(() => {
+    saveCurrentNote();
+  }, DEBOUNCE_MS);
+});
+
+// ============================================================
+// Pin toggle
+// ============================================================
+
+function updatePinButtonState(isPinned) {
+  if (isPinned) {
+    pinBtn.classList.add('header__pin--active');
+  } else {
+    pinBtn.classList.remove('header__pin--active');
+  }
+}
+
+pinBtn.addEventListener('click', () => {
+  if (!currentNoteId) return;
+  const note = data.notes.find((n) => n.id === currentNoteId);
+  if (!note) return;
+
+  note.pinned = !note.pinned;
+  note.updatedAt = new Date().toISOString();
+  saveData();
+  updatePinButtonState(note.pinned === true);
+  flashSaveIndicator();
+});
+
+// ============================================================
+// Color picker
+// ============================================================
+
+function updateColorIndicator(color) {
+  // Remove all color classes
+  colorDotIndicator.className = 'color-dot-indicator';
+  if (color) {
+    colorDotIndicator.classList.add('color-dot-indicator--' + color);
+  } else {
+    colorDotIndicator.classList.add('color-dot-indicator--none');
+  }
+}
+
+function updateColorPickerSelection(color) {
+  colorPicker.querySelectorAll('.color-dot').forEach((dot) => {
+    dot.classList.remove('color-dot--selected');
+    if (dot.dataset.color === (color || '')) {
+      dot.classList.add('color-dot--selected');
+    }
+  });
+}
+
+colorBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (colorPicker.hidden) {
+    const note = data.notes.find((n) => n.id === currentNoteId);
+    if (note) {
+      updateColorPickerSelection(getValidColor(note.color));
+    }
+    colorPicker.hidden = false;
+  } else {
+    colorPicker.hidden = true;
+  }
+});
+
+colorPicker.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const dot = e.target.closest('.color-dot');
+  if (!dot) return;
+
+  if (!currentNoteId) return;
+  const note = data.notes.find((n) => n.id === currentNoteId);
+  if (!note) return;
+
+  const selectedColor = dot.dataset.color || null;
+  note.color = selectedColor;
+  note.updatedAt = new Date().toISOString();
+  saveData();
+
+  updateColorIndicator(getValidColor(note.color));
+  updateColorPickerSelection(getValidColor(note.color));
+  flashSaveIndicator();
+  colorPicker.hidden = true;
+});
+
+// Close color picker on outside click
+document.addEventListener('click', () => {
+  colorPicker.hidden = true;
+});
+
+// ============================================================
+// Dropdown menu
+// ============================================================
+
+menuBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  dropdownMenu.hidden = !dropdownMenu.hidden;
+});
+
+exportBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  dropdownMenu.hidden = true;
+  exportData();
+});
+
+// Close dropdown on outside click
+document.addEventListener('click', () => {
+  dropdownMenu.hidden = true;
 });
 
 // ============================================================
@@ -608,6 +884,46 @@ function handleMarkdownInsert(action) {
 }
 
 // ============================================================
+// List auto-continuation (Step 7)
+// ============================================================
+
+editorTextarea.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  if (e.isComposing) return; // IME composing — do nothing
+
+  const ta = editorTextarea;
+  const start = ta.selectionStart;
+  const val = ta.value;
+
+  // Find the current line
+  const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+  const lineText = val.substring(lineStart, start);
+
+  // Match list prefix: optional leading spaces + "- " or "* "
+  const listMatch = lineText.match(/^(\s*[-*] )/);
+  if (!listMatch) return;
+
+  const prefix = listMatch[1];
+  const lineContent = lineText.substring(prefix.length);
+
+  e.preventDefault();
+
+  if (lineContent.length === 0) {
+    // Empty list item — remove the prefix and end the list
+    ta.value = val.substring(0, lineStart) + '\n' + val.substring(start);
+    ta.selectionStart = ta.selectionEnd = lineStart + 1;
+  } else {
+    // Continue the list
+    const insertStr = '\n' + prefix;
+    ta.value = val.substring(0, start) + insertStr + val.substring(start);
+    ta.selectionStart = ta.selectionEnd = start + insertStr.length;
+  }
+
+  ta.focus();
+  ta.dispatchEvent(new Event('input'));
+});
+
+// ============================================================
 // Navigation (History API)
 // ============================================================
 
@@ -617,7 +933,10 @@ window.addEventListener('popstate', (e) => {
     const note = data.notes.find((n) => n.id === e.state.id);
     if (note) {
       currentNoteId = e.state.id;
+      editorTitle.value = note.title || '';
       editorTextarea.value = note.body;
+      updatePinButtonState(note.pinned === true);
+      updateColorIndicator(getValidColor(note.color));
       editView.classList.add('view-editor--active');
       listView.classList.add('view-list--behind');
     }
@@ -654,8 +973,11 @@ fab.addEventListener('click', () => {
   const now = new Date().toISOString();
   const note = {
     id: String(Date.now()),
+    title: '',
     body: '',
     archived: false,
+    pinned: false,
+    color: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -679,10 +1001,6 @@ copyBtnEditor.addEventListener('click', () => {
 });
 
 // Export
-exportBtn.addEventListener('click', () => {
-  exportData();
-});
-
 function exportData() {
   const exportObj = {
     version: data.version,

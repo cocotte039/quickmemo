@@ -622,7 +622,7 @@ function closeEditor() {
   }
 
   // Close any open pickers
-  colorPicker.hidden = true;
+  colorPicker.classList.remove('color-picker--open');
 
   editView.classList.remove('view-editor--active');
   listView.classList.remove('view-list--behind');
@@ -727,14 +727,14 @@ function updateColorPickerSelection(color) {
 
 colorBtn.addEventListener('click', (e) => {
   e.stopPropagation();
-  if (colorPicker.hidden) {
+  if (!colorPicker.classList.contains('color-picker--open')) {
     const note = data.notes.find((n) => n.id === currentNoteId);
     if (note) {
       updateColorPickerSelection(getValidColor(note.color));
     }
-    colorPicker.hidden = false;
+    colorPicker.classList.add('color-picker--open');
   } else {
-    colorPicker.hidden = true;
+    colorPicker.classList.remove('color-picker--open');
   }
 });
 
@@ -755,12 +755,12 @@ colorPicker.addEventListener('click', (e) => {
   updateColorIndicator(getValidColor(note.color));
   updateColorPickerSelection(getValidColor(note.color));
   flashSaveIndicator();
-  colorPicker.hidden = true;
+  colorPicker.classList.remove('color-picker--open');
 });
 
 // Close color picker on outside click
 document.addEventListener('click', () => {
-  colorPicker.hidden = true;
+  colorPicker.classList.remove('color-picker--open');
 });
 
 // ============================================================
@@ -865,14 +865,37 @@ function handleMarkdownInsert(action) {
         return;
       }
       break;
-    case 'newline':
-      insertText = '  \n';
-      cursorOffset = 3;
-      break;
-    case 'tab':
+    case 'tab': {
+      // If cursor is on a list line, indent the whole line
+      const tabLineStart = val.lastIndexOf('\n', start - 1) + 1;
+      const tabLineText = val.substring(tabLineStart, end);
+      const tabListMatch = tabLineText.match(/^(\s*)([-*] )/);
+      if (tabListMatch) {
+        // Indent the list item by 2 spaces
+        ta.value = val.substring(0, tabLineStart) + '  ' + val.substring(tabLineStart);
+        ta.selectionStart = start + 2;
+        ta.selectionEnd = end + 2;
+        ta.focus();
+        ta.dispatchEvent(new Event('input'));
+        return;
+      }
       insertText = '  ';
       cursorOffset = 2;
       break;
+    }
+    case 'home': {
+      const homeLineStart = val.lastIndexOf('\n', start - 1) + 1;
+      ta.selectionStart = ta.selectionEnd = homeLineStart;
+      ta.focus();
+      return;
+    }
+    case 'end': {
+      let endLineEnd = val.indexOf('\n', start);
+      if (endLineEnd === -1) endLineEnd = val.length;
+      ta.selectionStart = ta.selectionEnd = endLineEnd;
+      ta.focus();
+      return;
+    }
   }
 
   if (insertText) {

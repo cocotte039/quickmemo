@@ -446,7 +446,6 @@ button {
   padding: var(--space-6);
   padding-bottom: 0;
   gap: var(--space-6);
-  flex: 1;
 }
 
 .voice-overlay__status,
@@ -520,6 +519,7 @@ button {
   bottom: calc(env(safe-area-inset-bottom, 0px) + 2.5rem);
   left: 50%;
   transform: translateX(-50%);
+  z-index: 51;
 }
 
 .voice-overlay__stop:active {

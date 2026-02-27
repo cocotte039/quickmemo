@@ -144,37 +144,43 @@ function createWebSpeechSTT(lang) {
   let recognition = null;
   let callbacks = { onResult: null, onError: null, onEnd: null };
 
+  function createRecognition() {
+    const rec = new SpeechRecognition();
+    rec.lang = lang;
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    rec.onresult = (event) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (callbacks.onResult) {
+          callbacks.onResult(result[0].transcript, result.isFinal);
+        }
+      }
+    };
+
+    rec.onerror = (event) => {
+      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      if (callbacks.onError) callbacks.onError(event.error);
+    };
+
+    rec.onend = () => {
+      // Chrome stops after silence timeout; auto-restart with fresh instance
+      if (voiceRecording) {
+        recognition = createRecognition();
+        try { recognition.start(); } catch (e) { /* ignore */ }
+        return;
+      }
+      if (callbacks.onEnd) callbacks.onEnd();
+    };
+
+    return rec;
+  }
+
   return {
     isSupported() { return true; },
     start() {
-      recognition = new SpeechRecognition();
-      recognition.lang = lang;
-      recognition.continuous = true;
-      recognition.interimResults = true;
-
-      recognition.onresult = (event) => {
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const result = event.results[i];
-          if (callbacks.onResult) {
-            callbacks.onResult(result[0].transcript, result.isFinal);
-          }
-        }
-      };
-
-      recognition.onerror = (event) => {
-        if (event.error === 'no-speech' || event.error === 'aborted') return;
-        if (callbacks.onError) callbacks.onError(event.error);
-      };
-
-      recognition.onend = () => {
-        // Chrome stops after silence timeout; auto-restart if still recording
-        if (voiceRecording) {
-          try { recognition.start(); } catch (e) { /* ignore */ }
-          return;
-        }
-        if (callbacks.onEnd) callbacks.onEnd();
-      };
-
+      recognition = createRecognition();
       recognition.start();
     },
     stop() {

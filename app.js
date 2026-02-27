@@ -20,9 +20,31 @@ let saveTimerId = null;
 let toastTimerId = null;
 let undoAction = null;
 let unsavedChanges = false;
-let voiceRecording = false;
-let voiceFinalizedText = '';
-let activeSTTEngine = null;
+const voiceState = {
+  recording: false,
+  finalSegments: [],
+  engine: null,
+  cancelled: false,
+  appendMode: false,
+  appendTargetId: null,
+  appendCursorPos: null,
+  abortController: null,
+};
+
+function resetVoiceState() {
+  voiceState.recording = false;
+  voiceState.finalSegments = [];
+  voiceState.engine = null;
+  voiceState.cancelled = false;
+  voiceState.appendMode = false;
+  voiceState.appendTargetId = null;
+  voiceState.appendCursorPos = null;
+  voiceState.abortController = null;
+}
+
+function getFinalizedText() {
+  return voiceState.finalSegments.join('');
+}
 
 // --- ID generation ---
 function generateId() {
@@ -47,6 +69,10 @@ const voiceStatus    = document.getElementById('voice-status');
 const voiceProcessing = document.getElementById('voice-processing');
 const voiceTranscript = document.getElementById('voice-transcript');
 const voiceStopBtn   = document.getElementById('voice-stop-btn');
+const voiceCancelBtn = document.getElementById('voice-cancel-btn');
+const voiceControls  = document.getElementById('voice-controls');
+const voiceContext    = document.getElementById('voice-context');
+const voiceStatusLabel = document.getElementById('voice-status-label');
 const memoListEl    = document.getElementById('memo-list');
 const emptyStateEl  = document.getElementById('empty-state');
 const emptyText     = emptyStateEl.querySelector('.empty-state__text');
@@ -64,6 +90,7 @@ const pinBtn        = document.getElementById('pin-btn');
 const colorBtn      = document.getElementById('color-btn');
 const colorDotIndicator = document.getElementById('color-dot-indicator');
 const colorPicker   = document.getElementById('color-picker');
+const voiceAppendBtn = document.getElementById('voice-append-btn');
 const saveIndicator = document.getElementById('save-indicator');
 const toastEl       = document.getElementById('toast');
 const toastMessage  = document.getElementById('toast-message');
@@ -172,7 +199,11 @@ function createWebSpeechSTT(lang) {
 
     rec.onend = () => {
       // Chrome stops after silence timeout; auto-restart with fresh instance
-      if (voiceRecording) {
+      if (voiceState.recording) {
+        // Disconnect old instance handlers to prevent late results
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
         recognition = createRecognition();
         try { recognition.start(); } catch (e) { /* ignore */ }
         return;
@@ -208,7 +239,7 @@ function getSTTEngine() {
 // Gemini API client
 // ============================================================
 
-async function summarizeWithGemini(text) {
+async function summarizeWithGemini(text, signal) {
   if (!settings.geminiApiKey) {
     throw new Error('API key not configured. Open Settings to add your Gemini API key.');
   }
@@ -223,6 +254,7 @@ async function summarizeWithGemini(text) {
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -1403,18 +1435,30 @@ function startVoiceMemo() {
   }
 
   // Reset state
-  voiceFinalizedText = '';
-  voiceRecording = true;
-  activeSTTEngine = engine;
+  voiceState.finalSegments = [];
+  voiceState.recording = true;
+  voiceState.cancelled = false;
+  voiceState.engine = engine;
+  voiceState.abortController = null;
+  voiceState.appendMode = false;
+  voiceState.appendTargetId = null;
+  voiceContext.hidden = true;
+  voiceStatusLabel.textContent = 'Recording...';
   voiceTranscript.textContent = '';
   voiceStatus.hidden = false;
   voiceProcessing.hidden = true;
   voiceStopBtn.hidden = false;
+  voiceCancelBtn.hidden = false;
   voiceOverlay.hidden = false;
 
   engine.onResult = (text, isFinal) => {
+    if (voiceState.cancelled) return;
     if (isFinal) {
-      voiceFinalizedText += text;
+      // Dedup: skip if same text as last segment
+      const segments = voiceState.finalSegments;
+      if (segments.length === 0 || segments[segments.length - 1] !== text) {
+        voiceState.finalSegments.push(text);
+      }
     }
     renderTranscript(text, isFinal);
   };
@@ -1425,7 +1469,67 @@ function startVoiceMemo() {
   };
 
   engine.onEnd = () => {
-    if (!voiceRecording) {
+    if (!voiceState.recording) {
+      processVoiceResult();
+    }
+  };
+
+  engine.start();
+}
+
+function startVoiceAppend() {
+  // Check STT support
+  const engine = getSTTEngine();
+  if (!engine) {
+    showToast('Voice input is not supported in this browser', 'danger', 4000);
+    return;
+  }
+
+  // Capture the target note ID before showing overlay
+  const targetId = currentNoteId;
+  if (!targetId) return;
+
+  // Show context label with note title
+  const note = data.notes.find((n) => n.id === targetId);
+  if (note) {
+    voiceContext.textContent = note.title || note.body.substring(0, 30) || 'Untitled';
+    voiceContext.hidden = false;
+  }
+
+  // Reset state
+  voiceState.finalSegments = [];
+  voiceState.recording = true;
+  voiceState.cancelled = false;
+  voiceState.engine = engine;
+  voiceState.abortController = null;
+  voiceState.appendMode = true;
+  voiceState.appendTargetId = targetId;
+  voiceTranscript.textContent = '';
+  voiceStatus.hidden = false;
+  voiceStatusLabel.textContent = 'Appending...';
+  voiceProcessing.hidden = true;
+  voiceStopBtn.hidden = false;
+  voiceCancelBtn.hidden = false;
+  voiceOverlay.hidden = false;
+
+  engine.onResult = (text, isFinal) => {
+    if (voiceState.cancelled) return;
+    if (isFinal) {
+      const segments = voiceState.finalSegments;
+      if (segments.length === 0 || segments[segments.length - 1] !== text) {
+        voiceState.finalSegments.push(text);
+      }
+    }
+    renderTranscript(text, isFinal);
+  };
+
+  engine.onError = (error) => {
+    showToast('Voice error: ' + error, 'danger', 4000);
+    stopVoiceMemo();
+  };
+
+  engine.onEnd = () => {
+    if (!voiceState.recording) {
       processVoiceResult();
     }
   };
@@ -1437,10 +1541,10 @@ function renderTranscript(interimText, isFinal) {
   // Clear and rebuild: finalized text in white, interim in grey
   voiceTranscript.textContent = '';
 
-  if (voiceFinalizedText) {
+  if (getFinalizedText()) {
     const finalSpan = document.createElement('span');
     finalSpan.className = 'voice-overlay__text--final';
-    finalSpan.textContent = voiceFinalizedText;
+    finalSpan.textContent = getFinalizedText();
     voiceTranscript.appendChild(finalSpan);
   }
 
@@ -1456,30 +1560,90 @@ function renderTranscript(interimText, isFinal) {
 }
 
 function stopVoiceMemo() {
-  voiceRecording = false;
-  if (activeSTTEngine) {
-    activeSTTEngine.stop();
+  voiceState.recording = false;
+  if (voiceState.engine) {
+    voiceState.engine.stop();
   }
 }
 
+function cancelVoiceMemo() {
+  voiceState.cancelled = true;
+  voiceState.recording = false;
+  if (voiceState.engine) {
+    voiceState.engine.stop();
+  }
+  if (voiceState.abortController) {
+    voiceState.abortController.abort();
+  }
+  voiceOverlay.hidden = true;
+  voiceContext.hidden = true;
+  voiceStatusLabel.textContent = 'Recording...';
+  resetVoiceState();
+}
+
 async function processVoiceResult() {
-  if (!voiceFinalizedText.trim()) {
+  if (voiceState.cancelled) {
     voiceOverlay.hidden = true;
-    activeSTTEngine = null;
+    resetVoiceState();
+    return;
+  }
+  if (!getFinalizedText().trim()) {
+    voiceOverlay.hidden = true;
+    voiceContext.hidden = true;
+    voiceStatusLabel.textContent = 'Recording...';
+    voiceState.engine = null;
     showToast('No speech detected', 'warning', 3000);
     return;
   }
 
-  // Show processing UI
+  // Hide recording controls
   voiceStatus.hidden = true;
   voiceStopBtn.hidden = true;
+  voiceCancelBtn.hidden = true;
+
+  // --- Append mode: skip Gemini, insert raw text ---
+  if (voiceState.appendMode) {
+    const targetId = voiceState.appendTargetId;
+    const targetNote = data.notes.find((n) => n.id === targetId);
+    voiceOverlay.hidden = true;
+    voiceContext.hidden = true;
+    voiceStatusLabel.textContent = 'Recording...';
+    voiceState.engine = null;
+
+    if (targetNote) {
+      const appendText = getFinalizedText();
+      const separator = targetNote.body.trim() ? '\n\n' : '';
+      targetNote.body += separator + appendText;
+      targetNote.updatedAt = new Date().toISOString();
+      saveData();
+
+      if (currentNoteId === targetId) {
+        editorTextarea.value = targetNote.body;
+        editorTextarea.scrollTop = editorTextarea.scrollHeight;
+        editorTextarea.selectionStart = editorTextarea.value.length;
+        editorTextarea.selectionEnd = editorTextarea.value.length;
+        editorTextarea.focus();
+        flashSaveIndicator();
+      }
+      showToast('Text appended', 'success', 2000);
+    }
+    resetVoiceState();
+    return;
+  }
+
+  // --- New memo mode: show processing UI and summarize ---
   voiceProcessing.hidden = false;
 
   let title = '';
   let body = '';
 
   try {
-    const summary = await summarizeWithGemini(voiceFinalizedText);
+    voiceState.abortController = new AbortController();
+    const summary = await summarizeWithGemini(getFinalizedText(), voiceState.abortController.signal);
+    if (voiceState.cancelled) {
+      resetVoiceState();
+      return;
+    }
     // Parse: first ## heading line → title, rest → body
     const lines = summary.split('\n');
     for (let i = 0; i < lines.length; i++) {
@@ -1495,11 +1659,13 @@ async function processVoiceResult() {
     // Fallback: use raw text
     showToast(e.message || 'Summarization failed. Saving raw text.', 'warning', 4000);
     title = '';
-    body = voiceFinalizedText;
+    body = getFinalizedText();
   }
 
   voiceOverlay.hidden = true;
-  activeSTTEngine = null;
+  voiceContext.hidden = true;
+  voiceStatusLabel.textContent = 'Recording...';
+  voiceState.engine = null;
 
   // Create new memo and open editor
   const now = new Date().toISOString();
@@ -1522,8 +1688,16 @@ voiceFab.addEventListener('click', () => {
   startVoiceMemo();
 });
 
+voiceAppendBtn.addEventListener('click', () => {
+  startVoiceAppend();
+});
+
 voiceStopBtn.addEventListener('click', () => {
   stopVoiceMemo();
+});
+
+voiceCancelBtn.addEventListener('click', () => {
+  cancelVoiceMemo();
 });
 
 // ============================================================

@@ -61,15 +61,19 @@
   <!-- Voice Recording Overlay -->
   <div id="voice-overlay" class="voice-overlay" hidden>
     <div class="voice-overlay__content">
+      <div id="voice-context" class="voice-overlay__context" hidden></div>
       <div id="voice-status" class="voice-overlay__status">
         <div class="voice-overlay__pulse"></div>
-        <span class="voice-overlay__label">Recording...</span>
+        <span id="voice-status-label" class="voice-overlay__label">Recording...</span>
       </div>
       <div id="voice-processing" class="voice-overlay__processing" hidden>
         <div class="voice-overlay__spinner"></div>
         <span class="voice-overlay__label">Summarizing...</span>
       </div>
       <div id="voice-transcript" class="voice-overlay__transcript"></div>
+    </div>
+    <div id="voice-controls" class="voice-overlay__controls">
+      <button id="voice-cancel-btn" class="voice-overlay__cancel">キャンセル</button>
       <button id="voice-stop-btn" class="voice-overlay__stop" aria-label="Stop recording">
         <div class="voice-overlay__stop-icon"></div>
       </button>
@@ -82,6 +86,14 @@
       <button id="back-btn" class="header__action" aria-label="Back">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="12,4 6,10 12,16"/>
+        </svg>
+      </button>
+      <button id="voice-append-btn" class="header__action" aria-label="Voice append">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="1" width="6" height="11" rx="3"/>
+          <path d="M19 10v1a7 7 0 01-14 0v-1"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
         </svg>
       </button>
       <div class="header__spacer"></div>

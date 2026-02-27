@@ -428,8 +428,9 @@ button {
   background: rgba(0, 0, 0, 0.85);
   z-index: 50;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  padding-top: 20vh;
 }
 
 .voice-overlay[hidden] {
@@ -443,7 +444,9 @@ button {
   width: 100%;
   max-width: 28rem;
   padding: var(--space-6);
+  padding-bottom: 0;
   gap: var(--space-6);
+  flex: 1;
 }
 
 .voice-overlay__status,
@@ -487,7 +490,7 @@ button {
 
 .voice-overlay__transcript {
   width: 100%;
-  max-height: 40vh;
+  max-height: 35vh;
   overflow-y: auto;
   font-family: var(--font-mono);
   font-size: var(--text-base);
@@ -513,10 +516,14 @@ button {
   align-items: center;
   justify-content: center;
   transition: transform 150ms ease;
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 2.5rem);
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .voice-overlay__stop:active {
-  transform: scale(0.9);
+  transform: translateX(-50%) scale(0.9);
 }
 
 .voice-overlay__stop-icon {
@@ -842,6 +849,12 @@ button {
 
 .settings-hint strong {
   color: var(--accent);
+}
+
+.settings-hint__link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .settings-save-btn {

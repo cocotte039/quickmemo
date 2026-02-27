@@ -29,7 +29,7 @@ Record your thoughts and let AI summarize them into structured notes.
 
 If summarization fails, the raw transcript is saved as a fallback so you never lose your words.
 
-> Voice input uses the browser's Web Speech API (`ja-JP`). Gemini 2.5 Flash (free tier) is used for summarization. Your API key is stored locally in `localStorage` and is never sent anywhere except to Google's Gemini API.
+> Voice input uses the browser's Web Speech API (`ja-JP`). Gemini 3 Flash (free tier) is used for summarization. The summary is written in the same language as the spoken input. Your API key is stored locally in `localStorage` and is never sent anywhere except to Google's Gemini API.
 
 ## Privacy
 
@@ -57,7 +57,7 @@ All data is stored in your browser's `localStorage`. **Nothing is sent to any se
 - HTML / CSS / Vanilla JS (no frameworks, no build step)
 - `localStorage` for persistence
 - Web Speech API for voice recognition
-- Gemini 2.5 Flash API for summarization
+- Gemini 3 Flash API for summarization
 - Service Worker (cache-first strategy, Gemini API excluded)
 - GitHub Pages for hosting
 

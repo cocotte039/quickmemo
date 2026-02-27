@@ -181,9 +181,9 @@ async function summarizeWithGemini(text) {
     throw new Error('API key not configured. Open Settings to add your Gemini API key.');
   }
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(settings.geminiApiKey);
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=' + encodeURIComponent(settings.geminiApiKey);
 
-  const prompt = '以下の音声書き起こしテキストを、見出し1つ（## 形式）と箇条書き（- 形式）で簡潔にまとめてください。Markdownのみ出力してください。余計な説明は不要です。\n\n' + text;
+  const prompt = 'Summarize the following voice transcription into a single heading (## format) and bullet points (- format). Output only Markdown, no extra explanation. Write the summary in the same language as the transcription.\n\n' + text;
 
   const res = await fetch(url, {
     method: 'POST',

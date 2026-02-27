@@ -1,4 +1,4 @@
-const CACHE_NAME = 'quickmemo-v6';
+const CACHE_NAME = 'quickmemo-v7';
 const ASSETS = [
   './',
   './index.html',

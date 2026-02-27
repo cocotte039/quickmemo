@@ -10,10 +10,11 @@ A lightweight, offline-first memo PWA. No server, no account — your notes stay
 - **Auto-save** — Saves as you type (500ms debounce)
 - **Voice memo** — Tap the mic FAB → speak → auto-summarize with Gemini → save as Markdown note
 - **Swipe actions** — Swipe left to archive; swipe left in Archive to delete
-- **Undo** — Toast with undo button on archive/delete
+- **Bulk delete** — Delete all archived memos at once with a single tap
+- **Undo** — Toast with undo button on archive/delete (including bulk delete)
 - **Markdown toolbar** — Quick-insert `#`, `-`, `>`, `` ` ``, `**`
 - **Copy** — One-tap copy from list or editor
-- **JSON export** — Backup all notes as a downloadable file
+- **JSON export / import** — Backup and restore notes as JSON files
 - **Installable** — Add to home screen for a standalone app experience
 - **Dark theme** — GitHub-dark inspired palette with monospace editor
 
@@ -63,7 +64,13 @@ All data is stored in your browser's `localStorage`. **Nothing is sent to any se
 
 ## Data & Backup
 
-Notes live only in your browser's `localStorage`. There is no cloud sync. Clearing browser data will delete your notes — use the **Export** button regularly to back up as JSON.
+Notes live only in your browser's `localStorage`. There is no cloud sync. Clearing browser data will delete your notes.
+
+- **Export**: Menu → Export JSON to download a backup file
+- **Import**: Menu → Import JSON to restore from a backup. Duplicate notes are merged by keeping the newer version. A backup is automatically exported before import.
+- **Storage monitor**: Settings screen shows current localStorage usage with a visual bar. Warning colors appear at 50% and 80% capacity.
+
+> If storage becomes full, the app warns you before leaving the page to prevent data loss.
 
 ## License
 

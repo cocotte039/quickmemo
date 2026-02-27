@@ -19,9 +19,18 @@ let currentNoteId = null;
 let saveTimerId = null;
 let toastTimerId = null;
 let undoAction = null;
+let unsavedChanges = false;
 let voiceRecording = false;
 let voiceFinalizedText = '';
 let activeSTTEngine = null;
+
+// --- ID generation ---
+function generateId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 
 // --- DOM refs ---
 const listView       = document.getElementById('list-view');
@@ -48,6 +57,8 @@ const backBtn       = document.getElementById('back-btn');
 const menuBtn       = document.getElementById('menu-btn');
 const dropdownMenu  = document.getElementById('dropdown-menu');
 const exportBtn     = document.getElementById('export-btn');
+const importBtn     = document.getElementById('import-btn');
+const importFileInput = document.getElementById('import-file-input');
 const copyBtnEditor = document.getElementById('copy-btn-editor');
 const pinBtn        = document.getElementById('pin-btn');
 const colorBtn      = document.getElementById('color-btn');
@@ -82,10 +93,19 @@ function loadData() {
 function saveData() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    unsavedChanges = false;
   } catch (e) {
+    unsavedChanges = true;
     showToast('Storage full. Please export and delete old memos.', 'danger', 5000);
   }
 }
+
+// Warn before leaving if there are unsaved changes
+window.addEventListener('beforeunload', (e) => {
+  if (unsavedChanges) {
+    e.preventDefault();
+  }
+});
 
 // ============================================================
 // Settings storage
@@ -280,6 +300,18 @@ function renderList() {
   }
 
   emptyStateEl.classList.remove('empty-state--visible');
+
+  // "Delete All" bar for Archive tab
+  if (currentTab === 'archived') {
+    const deleteAllBar = document.createElement('div');
+    deleteAllBar.className = 'delete-all-bar';
+    const deleteAllBtn = document.createElement('button');
+    deleteAllBtn.className = 'delete-all-btn';
+    deleteAllBtn.textContent = 'Delete All (' + notes.length + ')';
+    deleteAllBtn.addEventListener('click', () => deleteAllArchived());
+    deleteAllBar.appendChild(deleteAllBtn);
+    memoListEl.appendChild(deleteAllBar);
+  }
 
   // Track pin transition for divider
   let lastWasPinned = false;
@@ -636,6 +668,25 @@ function deleteNote(id) {
   updateEmptyState();
 }
 
+function deleteAllArchived() {
+  const archived = data.notes.filter((n) => n.archived === true);
+  if (archived.length === 0) return;
+
+  const count = archived.length;
+  if (!confirm(count + ' archived memo(s) will be permanently deleted. Continue?')) return;
+
+  const removedNotes = [...archived];
+  data.notes = data.notes.filter((n) => n.archived !== true);
+  saveData();
+  renderList();
+
+  showToast('Deleted ' + count + ' memo(s)', 'danger', 5000, 'Undo', () => {
+    data.notes.push(...removedNotes);
+    saveData();
+    renderList();
+  });
+}
+
 function updateEmptyState() {
   const notes = getFilteredNotes();
   if (notes.length === 0) {
@@ -911,9 +962,35 @@ document.addEventListener('click', () => {
 
 function openSettings() {
   geminiApiKeyInput.value = settings.geminiApiKey;
+  updateStorageUsage();
   settingsView.classList.add('view-editor--active');
   listView.classList.add('view-list--behind');
   history.pushState({ view: 'settings' }, '');
+}
+
+function updateStorageUsage() {
+  const storageBar = document.getElementById('storage-bar');
+  const storageText = document.getElementById('storage-text');
+  if (!storageBar || !storageText) return;
+
+  let totalBytes = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    totalBytes += (key.length + localStorage.getItem(key).length) * 2; // UTF-16
+  }
+  const maxBytes = 5 * 1024 * 1024; // 5MB typical limit
+  const pct = Math.min((totalBytes / maxBytes) * 100, 100);
+
+  storageBar.style.width = pct.toFixed(1) + '%';
+  storageBar.className = 'storage-bar__fill';
+  if (pct >= 80) {
+    storageBar.classList.add('storage-bar__fill--danger');
+  } else if (pct >= 50) {
+    storageBar.classList.add('storage-bar__fill--warning');
+  }
+  const kbUsed = (totalBytes / 1024).toFixed(0);
+  const kbMax = (maxBytes / 1024).toFixed(0);
+  storageText.textContent = kbUsed + ' KB / ' + kbMax + ' KB (' + pct.toFixed(1) + '%)';
 }
 
 function closeSettings() {
@@ -1189,7 +1266,7 @@ tabs.forEach((tabEl) => {
 fab.addEventListener('click', () => {
   const now = new Date().toISOString();
   const note = {
-    id: String(Date.now()),
+    id: generateId(),
     title: '',
     body: '',
     archived: false,
@@ -1236,6 +1313,64 @@ function exportData() {
   URL.revokeObjectURL(url);
   showToast('Exported', 'success', 2000);
 }
+
+// Import
+function importData(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.notes)) {
+        showToast('Invalid file format', 'danger', 3000);
+        return;
+      }
+
+      // Auto-backup current data before import
+      if (data.notes.length > 0) {
+        exportData();
+      }
+
+      // Merge: for duplicate IDs keep the one with newer updatedAt
+      const existingIds = new Map(data.notes.map((n) => [n.id, n]));
+      let addedCount = 0;
+      let updatedCount = 0;
+
+      for (const note of parsed.notes) {
+        if (!note.id || typeof note.archived !== 'boolean') continue;
+        const existing = existingIds.get(note.id);
+        if (existing) {
+          if (new Date(note.updatedAt) > new Date(existing.updatedAt)) {
+            Object.assign(existing, note);
+            updatedCount++;
+          }
+        } else {
+          data.notes.push(note);
+          addedCount++;
+        }
+      }
+
+      saveData();
+      renderList();
+      showToast('Imported: ' + addedCount + ' added, ' + updatedCount + ' updated', 'success', 3000);
+    } catch (err) {
+      showToast('Failed to parse JSON file', 'danger', 3000);
+    }
+  };
+  reader.readAsText(file);
+}
+
+importBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  dropdownMenu.hidden = true;
+  importFileInput.click();
+});
+
+importFileInput.addEventListener('change', () => {
+  if (importFileInput.files.length > 0) {
+    importData(importFileInput.files[0]);
+    importFileInput.value = '';
+  }
+});
 
 // ============================================================
 // Voice Memo
@@ -1357,7 +1492,7 @@ async function processVoiceResult() {
   // Create new memo and open editor
   const now = new Date().toISOString();
   const note = {
-    id: String(Date.now()),
+    id: generateId(),
     title: title,
     body: body,
     archived: false,

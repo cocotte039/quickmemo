@@ -28,8 +28,10 @@
         </button>
         <div id="dropdown-menu" class="dropdown-menu" hidden>
           <button id="export-btn" class="dropdown-menu__item">Export JSON</button>
+          <button id="import-btn" class="dropdown-menu__item">Import JSON</button>
           <button id="settings-menu-btn" class="dropdown-menu__item">Settings</button>
         </div>
+        <input id="import-file-input" type="file" accept=".json" hidden>
       </div>
     </header>
     <div class="tabs">
@@ -156,6 +158,13 @@
           </button>
         </div>
         <p class="settings-hint">Get a free key at <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener" class="settings-hint__link">ai.google.dev</a></p>
+      </div>
+      <div class="settings-section">
+        <label class="settings-label">Storage Usage</label>
+        <div class="storage-bar">
+          <div id="storage-bar" class="storage-bar__fill"></div>
+        </div>
+        <p id="storage-text" class="settings-hint"></p>
       </div>
       <button id="save-settings-btn" class="settings-save-btn">Save</button>
     </div>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'quickmemo-v5';
+const CACHE_NAME = 'quickmemo-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -28,6 +28,12 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // Gemini API requests: always go to network, never cache
+  if (event.request.url.includes('generativelanguage.googleapis.com')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => cached || fetch(event.request))
   );

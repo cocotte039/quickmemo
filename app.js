@@ -5,6 +5,7 @@
    ============================================================ */
 
 const STORAGE_KEY = 'quickmemo_data';
+const SETTINGS_KEY = 'quickmemo_settings';
 const DEBOUNCE_MS = 500;
 const SWIPE_THRESHOLD = 80;
 const SWIPE_ANGLE_LIMIT = 30; // degrees
@@ -12,15 +13,31 @@ const VALID_COLORS = ['blue', 'green', 'amber', 'rose', 'purple'];
 
 // --- State ---
 let data = { version: 1, notes: [] };
+let settings = { geminiApiKey: '' };
 let currentTab = 'active';   // 'active' | 'archived'
 let currentNoteId = null;
 let saveTimerId = null;
 let toastTimerId = null;
 let undoAction = null;
+let voiceRecording = false;
+let voiceFinalizedText = '';
+let activeSTTEngine = null;
 
 // --- DOM refs ---
-const listView      = document.getElementById('list-view');
-const editView      = document.getElementById('edit-view');
+const listView       = document.getElementById('list-view');
+const editView       = document.getElementById('edit-view');
+const settingsView   = document.getElementById('settings-view');
+const settingsBackBtn = document.getElementById('settings-back-btn');
+const settingsMenuBtn = document.getElementById('settings-menu-btn');
+const geminiApiKeyInput = document.getElementById('gemini-api-key');
+const toggleApiKeyBtn = document.getElementById('toggle-api-key');
+const saveSettingsBtn = document.getElementById('save-settings-btn');
+const voiceFab       = document.getElementById('voice-fab');
+const voiceOverlay   = document.getElementById('voice-overlay');
+const voiceStatus    = document.getElementById('voice-status');
+const voiceProcessing = document.getElementById('voice-processing');
+const voiceTranscript = document.getElementById('voice-transcript');
+const voiceStopBtn   = document.getElementById('voice-stop-btn');
 const memoListEl    = document.getElementById('memo-list');
 const emptyStateEl  = document.getElementById('empty-state');
 const emptyText     = emptyStateEl.querySelector('.empty-state__text');
@@ -68,6 +85,131 @@ function saveData() {
   } catch (e) {
     showToast('Storage full. Please export and delete old memos.', 'danger', 5000);
   }
+}
+
+// ============================================================
+// Settings storage
+// ============================================================
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed) {
+        settings = { geminiApiKey: parsed.geminiApiKey || '' };
+      }
+    }
+  } catch (e) {
+    settings = { geminiApiKey: '' };
+  }
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (e) {
+    showToast('Failed to save settings', 'danger', 3000);
+  }
+}
+
+// ============================================================
+// STT abstraction layer
+// ============================================================
+
+function createWebSpeechSTT(lang) {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return null;
+
+  let recognition = null;
+  let callbacks = { onResult: null, onError: null, onEnd: null };
+
+  return {
+    isSupported() { return true; },
+    start() {
+      recognition = new SpeechRecognition();
+      recognition.lang = lang;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (callbacks.onResult) {
+            callbacks.onResult(result[0].transcript, result.isFinal);
+          }
+        }
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error === 'no-speech' || event.error === 'aborted') return;
+        if (callbacks.onError) callbacks.onError(event.error);
+      };
+
+      recognition.onend = () => {
+        // Chrome stops after silence timeout; auto-restart if still recording
+        if (voiceRecording) {
+          try { recognition.start(); } catch (e) { /* ignore */ }
+          return;
+        }
+        if (callbacks.onEnd) callbacks.onEnd();
+      };
+
+      recognition.start();
+    },
+    stop() {
+      if (recognition) recognition.stop();
+    },
+    set onResult(fn) { callbacks.onResult = fn; },
+    set onError(fn) { callbacks.onError = fn; },
+    set onEnd(fn) { callbacks.onEnd = fn; },
+  };
+}
+
+function getSTTEngine() {
+  const engine = createWebSpeechSTT('ja-JP');
+  if (!engine) return null;
+  return engine;
+}
+
+// ============================================================
+// Gemini API client
+// ============================================================
+
+async function summarizeWithGemini(text) {
+  if (!settings.geminiApiKey) {
+    throw new Error('API key not configured. Open Settings to add your Gemini API key.');
+  }
+
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(settings.geminiApiKey);
+
+  const prompt = '以下の音声書き起こしテキストを、見出し1つ（## 形式）と箇条書き（- 形式）で簡潔にまとめてください。Markdownのみ出力してください。余計な説明は不要です。\n\n' + text;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+    }),
+  });
+
+  if (!res.ok) {
+    if (res.status === 400 || res.status === 403) {
+      throw new Error('Invalid API key. Please check your key in Settings.');
+    }
+    if (res.status === 429) {
+      throw new Error('Rate limit exceeded. Please wait a moment and try again.');
+    }
+    throw new Error('Gemini API error: ' + res.status);
+  }
+
+  const json = await res.json();
+  const candidate = json.candidates && json.candidates[0];
+  if (!candidate || !candidate.content || !candidate.content.parts) {
+    throw new Error('Unexpected API response format.');
+  }
+
+  return candidate.content.parts.map((p) => p.text).join('');
 }
 
 // ============================================================
@@ -764,6 +906,46 @@ document.addEventListener('click', () => {
 });
 
 // ============================================================
+// Settings UI
+// ============================================================
+
+function openSettings() {
+  geminiApiKeyInput.value = settings.geminiApiKey;
+  settingsView.classList.add('view-editor--active');
+  listView.classList.add('view-list--behind');
+  history.pushState({ view: 'settings' }, '');
+}
+
+function closeSettings() {
+  settingsView.classList.remove('view-editor--active');
+  listView.classList.remove('view-list--behind');
+}
+
+settingsBackBtn.addEventListener('click', () => {
+  if (history.state && history.state.view === 'settings') {
+    history.back();
+  } else {
+    closeSettings();
+  }
+});
+
+toggleApiKeyBtn.addEventListener('click', () => {
+  const isPassword = geminiApiKeyInput.type === 'password';
+  geminiApiKeyInput.type = isPassword ? 'text' : 'password';
+});
+
+saveSettingsBtn.addEventListener('click', () => {
+  settings.geminiApiKey = geminiApiKeyInput.value.trim();
+  saveSettings();
+  showToast('Settings saved', 'success', 2000);
+  if (history.state && history.state.view === 'settings') {
+    history.back();
+  } else {
+    closeSettings();
+  }
+});
+
+// ============================================================
 // Dropdown menu
 // ============================================================
 
@@ -776,6 +958,12 @@ exportBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   dropdownMenu.hidden = true;
   exportData();
+});
+
+settingsMenuBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  dropdownMenu.hidden = true;
+  openSettings();
 });
 
 // Close dropdown on outside click
@@ -963,10 +1151,16 @@ window.addEventListener('popstate', (e) => {
       editView.classList.add('view-editor--active');
       listView.classList.add('view-list--behind');
     }
+  } else if (e.state && e.state.view === 'settings') {
+    settingsView.classList.add('view-editor--active');
+    listView.classList.add('view-list--behind');
   } else {
     // Back to list
     if (editView.classList.contains('view-editor--active')) {
       closeEditor();
+    }
+    if (settingsView.classList.contains('view-editor--active')) {
+      closeSettings();
     }
   }
 });
@@ -1044,6 +1238,148 @@ function exportData() {
 }
 
 // ============================================================
+// Voice Memo
+// ============================================================
+
+function startVoiceMemo() {
+  // Check API key
+  if (!settings.geminiApiKey) {
+    showToast('Set your Gemini API key in Settings first', 'warning', 4000);
+    return;
+  }
+
+  // Check STT support
+  const engine = getSTTEngine();
+  if (!engine) {
+    showToast('Voice input is not supported in this browser', 'danger', 4000);
+    return;
+  }
+
+  // Reset state
+  voiceFinalizedText = '';
+  voiceRecording = true;
+  activeSTTEngine = engine;
+  voiceTranscript.textContent = '';
+  voiceStatus.hidden = false;
+  voiceProcessing.hidden = true;
+  voiceStopBtn.hidden = false;
+  voiceOverlay.hidden = false;
+
+  engine.onResult = (text, isFinal) => {
+    if (isFinal) {
+      voiceFinalizedText += text;
+    }
+    renderTranscript(text, isFinal);
+  };
+
+  engine.onError = (error) => {
+    showToast('Voice error: ' + error, 'danger', 4000);
+    stopVoiceMemo();
+  };
+
+  engine.onEnd = () => {
+    if (!voiceRecording) {
+      processVoiceResult();
+    }
+  };
+
+  engine.start();
+}
+
+function renderTranscript(interimText, isFinal) {
+  // Clear and rebuild: finalized text in white, interim in grey
+  voiceTranscript.textContent = '';
+
+  if (voiceFinalizedText) {
+    const finalSpan = document.createElement('span');
+    finalSpan.className = 'voice-overlay__text--final';
+    finalSpan.textContent = voiceFinalizedText;
+    voiceTranscript.appendChild(finalSpan);
+  }
+
+  if (!isFinal && interimText) {
+    const interimSpan = document.createElement('span');
+    interimSpan.className = 'voice-overlay__text--interim';
+    interimSpan.textContent = interimText;
+    voiceTranscript.appendChild(interimSpan);
+  }
+
+  // Auto-scroll to bottom
+  voiceTranscript.scrollTop = voiceTranscript.scrollHeight;
+}
+
+function stopVoiceMemo() {
+  voiceRecording = false;
+  if (activeSTTEngine) {
+    activeSTTEngine.stop();
+  }
+}
+
+async function processVoiceResult() {
+  if (!voiceFinalizedText.trim()) {
+    voiceOverlay.hidden = true;
+    activeSTTEngine = null;
+    showToast('No speech detected', 'warning', 3000);
+    return;
+  }
+
+  // Show processing UI
+  voiceStatus.hidden = true;
+  voiceStopBtn.hidden = true;
+  voiceProcessing.hidden = false;
+
+  let title = '';
+  let body = '';
+
+  try {
+    const summary = await summarizeWithGemini(voiceFinalizedText);
+    // Parse: first ## heading line → title, rest → body
+    const lines = summary.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const headingMatch = lines[i].match(/^##\s+(.+)/);
+      if (headingMatch && !title) {
+        title = headingMatch[1].trim();
+      } else {
+        body += lines[i] + '\n';
+      }
+    }
+    body = body.trim();
+  } catch (e) {
+    // Fallback: use raw text
+    showToast(e.message || 'Summarization failed. Saving raw text.', 'warning', 4000);
+    title = '';
+    body = voiceFinalizedText;
+  }
+
+  voiceOverlay.hidden = true;
+  activeSTTEngine = null;
+
+  // Create new memo and open editor
+  const now = new Date().toISOString();
+  const note = {
+    id: String(Date.now()),
+    title: title,
+    body: body,
+    archived: false,
+    pinned: false,
+    color: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  data.notes.push(note);
+  saveData();
+  openEditor(note.id);
+}
+
+voiceFab.addEventListener('click', () => {
+  startVoiceMemo();
+});
+
+voiceStopBtn.addEventListener('click', () => {
+  stopVoiceMemo();
+});
+
+// ============================================================
 // Service Worker registration
 // ============================================================
 
@@ -1059,6 +1395,7 @@ if ('serviceWorker' in navigator) {
 
 function init() {
   loadData();
+  loadSettings();
 
   // Set initial history state
   history.replaceState({ view: 'list' }, '');

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com;">
   <meta name="theme-color" content="#0d1117">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -28,6 +28,7 @@
         </button>
         <div id="dropdown-menu" class="dropdown-menu" hidden>
           <button id="export-btn" class="dropdown-menu__item">Export JSON</button>
+          <button id="settings-menu-btn" class="dropdown-menu__item">Settings</button>
         </div>
       </div>
     </header>
@@ -39,12 +40,38 @@
     <div id="empty-state" class="empty-state">
       <p class="empty-state__text"></p>
     </div>
+    <button id="voice-fab" class="fab fab--voice" aria-label="Voice memo">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="1" width="6" height="11" rx="3"/>
+        <path d="M19 10v1a7 7 0 01-14 0v-1"/>
+        <line x1="12" y1="19" x2="12" y2="23"/>
+        <line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+    </button>
     <button id="fab" class="fab" aria-label="New memo">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <line x1="12" y1="5" x2="12" y2="19"/>
         <line x1="5" y1="12" x2="19" y2="12"/>
       </svg>
     </button>
+  </div>
+
+  <!-- Voice Recording Overlay -->
+  <div id="voice-overlay" class="voice-overlay" hidden>
+    <div class="voice-overlay__content">
+      <div id="voice-status" class="voice-overlay__status">
+        <div class="voice-overlay__pulse"></div>
+        <span class="voice-overlay__label">Recording...</span>
+      </div>
+      <div id="voice-processing" class="voice-overlay__processing" hidden>
+        <div class="voice-overlay__spinner"></div>
+        <span class="voice-overlay__label">Summarizing...</span>
+      </div>
+      <div id="voice-transcript" class="voice-overlay__transcript"></div>
+      <button id="voice-stop-btn" class="voice-overlay__stop" aria-label="Stop recording">
+        <div class="voice-overlay__stop-icon"></div>
+      </button>
+    </div>
   </div>
 
   <!-- Edit View -->
@@ -103,6 +130,34 @@
       <button class="markdown-key" data-insert="tab">Tab</button>
       <button class="markdown-key" data-insert="home">Home</button>
       <button class="markdown-key" data-insert="end">End</button>
+    </div>
+  </div>
+
+  <!-- Settings View -->
+  <div id="settings-view" class="view view-editor">
+    <header class="header">
+      <button id="settings-back-btn" class="header__action" aria-label="Back">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="12,4 6,10 12,16"/>
+        </svg>
+      </button>
+      <h1 class="header__title">Settings</h1>
+    </header>
+    <div class="settings-body">
+      <div class="settings-section">
+        <label class="settings-label" for="gemini-api-key">Gemini API Key</label>
+        <div class="settings-input-row">
+          <input id="gemini-api-key" class="settings-input" type="password" placeholder="Enter your API key" autocomplete="off">
+          <button id="toggle-api-key" class="settings-toggle-btn" aria-label="Show/hide API key">
+            <svg id="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+        <p class="settings-hint">Get a free key at <strong>ai.google.dev</strong></p>
+      </div>
+      <button id="save-settings-btn" class="settings-save-btn">Save</button>
     </div>
   </div>
 

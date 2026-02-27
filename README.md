@@ -8,6 +8,7 @@ A lightweight, offline-first memo PWA. No server, no account — your notes stay
 
 - **Offline-first** — Works without internet via Service Worker
 - **Auto-save** — Saves as you type (500ms debounce)
+- **Voice memo** — Tap the mic FAB → speak → auto-summarize with Gemini → save as Markdown note
 - **Swipe actions** — Swipe left to archive; swipe left in Archive to delete
 - **Undo** — Toast with undo button on archive/delete
 - **Markdown toolbar** — Quick-insert `#`, `-`, `>`, `` ` ``, `**`
@@ -16,9 +17,23 @@ A lightweight, offline-first memo PWA. No server, no account — your notes stay
 - **Installable** — Add to home screen for a standalone app experience
 - **Dark theme** — GitHub-dark inspired palette with monospace editor
 
+## Voice Memo
+
+Record your thoughts and let AI summarize them into structured notes.
+
+1. Open **Settings** (menu → Settings) and enter your [Gemini API key](https://ai.google.dev/)
+2. Tap the green mic button on the list screen
+3. Speak — real-time transcription is shown on the overlay
+4. Tap stop — Gemini summarizes the text into a heading + bullet points
+5. The result is saved as a new memo and opened in the editor
+
+If summarization fails, the raw transcript is saved as a fallback so you never lose your words.
+
+> Voice input uses the browser's Web Speech API (`ja-JP`). Gemini 2.5 Flash (free tier) is used for summarization. Your API key is stored locally in `localStorage` and is never sent anywhere except to Google's Gemini API.
+
 ## Privacy
 
-All data is stored in your browser's `localStorage`. **Nothing is sent to any server.** The source code is public, but your notes are completely private to your device.
+All data is stored in your browser's `localStorage`. **Nothing is sent to any server** except voice memo summarization requests, which are sent directly to the Gemini API using your own API key.
 
 ## Setup
 
@@ -41,7 +56,9 @@ All data is stored in your browser's `localStorage`. **Nothing is sent to any se
 
 - HTML / CSS / Vanilla JS (no frameworks, no build step)
 - `localStorage` for persistence
-- Service Worker (cache-first strategy)
+- Web Speech API for voice recognition
+- Gemini 2.5 Flash API for summarization
+- Service Worker (cache-first strategy, Gemini API excluded)
 - GitHub Pages for hosting
 
 ## Data & Backup

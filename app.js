@@ -149,10 +149,16 @@ function createWebSpeechSTT(lang) {
     rec.lang = lang;
     rec.continuous = true;
     rec.interimResults = true;
+    let processedFinalCount = 0;
 
     rec.onresult = (event) => {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
+        if (result.isFinal) {
+          // Skip results we already processed as final
+          if (i < processedFinalCount) continue;
+          processedFinalCount = i + 1;
+        }
         if (callbacks.onResult) {
           callbacks.onResult(result[0].transcript, result.isFinal);
         }

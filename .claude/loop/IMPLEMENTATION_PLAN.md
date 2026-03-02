@@ -9,33 +9,33 @@
 ## マイルストーン
 
 ### M1: 必須（バグ修正 + Critical リスク緩和）
-- 状態: pending
+- 状態: completed
 - 優先度: high
 
 #### タスク
 - [x] T1.1: processVoiceResult の二重呼び出し防止 + 状態クリーンアップ統一 -- specs/m1-t1.md
-- [ ] T1.2: auto-restart のインスタンス管理改善（テキスト重複の根本修正） -- specs/m1-t2.md
-- [ ] T1.3: dedup ロジックの強化 -- specs/m1-t3.md
-- [ ] T1.4: stopVoiceMemo の即時UI反映 + onend デッドロック防止 -- specs/m1-t4.md
-- [ ] T1.5: auto-restart のエラーハンドリング改善 -- specs/m1-t5.md
+- [x] T1.2: auto-restart のインスタンス管理改善（テキスト重複の根本修正） -- specs/m1-t2.md
+- [x] T1.3: dedup ロジックの強化 -- specs/m1-t3.md
+- [x] T1.4: stopVoiceMemo の即時UI反映 + onend デッドロック防止 -- specs/m1-t4.md
+- [x] T1.5: auto-restart のエラーハンドリング改善 -- specs/m1-t5.md
 
 ### M2: 高ROI（操作性向上）
-- 状態: pending
+- 状態: completed
 - 優先度: medium
 
 #### タスク
-- [ ] T2.1: 追記モードの発見性改善 -- specs/m2-t1.md
-- [ ] T2.2: 録音経過時間カウンター -- specs/m2-t2.md
-- [ ] T2.3: 追記モードのオーバーレイ差別化 -- specs/m2-t3.md
-- [ ] T2.4: コールバック共通化リファクタリング -- specs/m2-t4.md
+- [x] T2.1: 追記モードの発見性改善 -- specs/m2-t1.md
+- [x] T2.2: 録音経過時間カウンター -- specs/m2-t2.md
+- [x] T2.3: 追記モードのオーバーレイ差別化 -- specs/m2-t3.md
+- [x] T2.4: コールバック共通化リファクタリング -- specs/m2-t4.md
 
 ### M3: ポリッシュ
-- 状態: pending
+- 状態: completed
 - 優先度: low
 
 #### タスク
-- [ ] T3.1: オーバーレイのフェードアウトトランジション -- specs/m3-t1.md
-- [ ] T3.2: ブラウザ互換性チェック -- specs/m3-t2.md
+- [x] T3.1: オーバーレイのフェードアウトトランジション -- specs/m3-t1.md
+- [x] T3.2: ブラウザ互換性チェック -- specs/m3-t2.md
 
 ## 完了基準 (Definition of Done)
 
@@ -54,6 +54,6 @@
 
 | マイルストーン | 状態 | タスク完了 | 最終更新 |
 |---|---|---|---|
-| M1: 必須（バグ修正） | in_progress | 1/5 | 2026-03-02 |
-| M2: 高ROI（操作性向上） | pending | 0/4 | - |
-| M3: ポリッシュ | pending | 0/2 | - |
+| M1: 必須（バグ修正） | completed | 5/5 | 2026-03-02 |
+| M2: 高ROI（操作性向上） | completed | 4/4 | 2026-03-02 |
+| M3: ポリッシュ | completed | 2/2 | 2026-03-02 |

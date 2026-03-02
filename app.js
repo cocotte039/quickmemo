@@ -30,6 +30,8 @@ const voiceState = {
   appendCursorPos: null,
   abortController: null,
   processing: false,
+  timerInterval: null,
+  timerStart: null,
 };
 
 function resetVoiceState() {
@@ -42,10 +44,32 @@ function resetVoiceState() {
   voiceState.appendCursorPos = null;
   voiceState.abortController = null;
   voiceState.processing = false;
+  if (voiceState.timerInterval) {
+    clearInterval(voiceState.timerInterval);
+  }
+  voiceState.timerInterval = null;
+  voiceState.timerStart = null;
 }
 
 function getFinalizedText() {
   return voiceState.finalSegments.join('');
+}
+
+function showVoiceOverlay() {
+  voiceOverlay.hidden = false;
+  requestAnimationFrame(() => {
+    voiceOverlay.classList.add('voice-overlay--visible');
+  });
+}
+
+function hideVoiceOverlay() {
+  voiceOverlay.classList.remove('voice-overlay--visible');
+  voiceOverlay.classList.remove('voice-overlay--append');
+  const fallback = setTimeout(() => { voiceOverlay.hidden = true; }, 300);
+  voiceOverlay.addEventListener('transitionend', () => {
+    clearTimeout(fallback);
+    voiceOverlay.hidden = true;
+  }, { once: true });
 }
 
 // --- ID generation ---
@@ -172,8 +196,13 @@ function createWebSpeechSTT(lang) {
 
   let recognition = null;
   let callbacks = { onResult: null, onError: null, onEnd: null };
+  let generation = 0;
+  let restartRetryCount = 0;
+  const MAX_RESTART_RETRIES = 3;
 
   function createRecognition() {
+    generation++;
+    const myGen = generation;
     const rec = new SpeechRecognition();
     rec.lang = lang;
     rec.continuous = true;
@@ -181,6 +210,7 @@ function createWebSpeechSTT(lang) {
     let processedFinalCount = 0;
 
     rec.onresult = (event) => {
+      if (myGen !== generation) return; // Ignore results from old instances
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
@@ -206,8 +236,40 @@ function createWebSpeechSTT(lang) {
         rec.onresult = null;
         rec.onerror = null;
         rec.onend = null;
+        try { rec.abort(); } catch (e) { /* ignore */ }
         recognition = createRecognition();
-        try { recognition.start(); } catch (e) { /* ignore */ }
+
+        try {
+          recognition.start();
+          restartRetryCount = 0;
+        } catch (e) {
+          restartRetryCount++;
+          if (restartRetryCount >= MAX_RESTART_RETRIES) {
+            // Retry limit reached: graceful stop
+            voiceState.recording = false;
+            if (callbacks.onEnd) callbacks.onEnd();
+            return;
+          }
+          if (e.name === 'NotAllowedError') {
+            // Microphone permission revoked
+            voiceState.recording = false;
+            if (callbacks.onError) callbacks.onError('microphone-denied');
+            if (callbacks.onEnd) callbacks.onEnd();
+          } else {
+            // InvalidStateError or other: retry after delay
+            setTimeout(() => {
+              if (!voiceState.recording) return;
+              recognition = createRecognition();
+              try {
+                recognition.start();
+                restartRetryCount = 0;
+              } catch (e2) {
+                voiceState.recording = false;
+                if (callbacks.onEnd) callbacks.onEnd();
+              }
+            }, 300);
+          }
+        }
         return;
       }
       if (callbacks.onEnd) callbacks.onEnd();
@@ -235,6 +297,21 @@ function getSTTEngine() {
   const engine = createWebSpeechSTT('ja-JP');
   if (!engine) return null;
   return engine;
+}
+
+function getSpeechSupportInfo() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition) {
+    return { supported: true };
+  }
+  const ua = navigator.userAgent;
+  if (/Firefox/i.test(ua)) {
+    return { supported: false, message: 'Voice input requires Chrome or Edge. Firefox does not support Web Speech API.' };
+  }
+  if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) {
+    return { supported: false, message: 'Voice input requires Chrome or Edge. Safari has limited Web Speech API support.' };
+  }
+  return { supported: false, message: 'Voice input is not supported in this browser. Please use Chrome or Edge.' };
 }
 
 // ============================================================
@@ -846,6 +923,16 @@ function openEditor(id) {
   // History
   history.pushState({ view: 'edit', id: id }, '');
 
+  // Voice append tooltip (first time only)
+  const TOOLTIP_KEY = 'quickmemo_voice_append_shown';
+  if (!localStorage.getItem(TOOLTIP_KEY)) {
+    voiceAppendBtn.setAttribute('data-tooltip', '🎤 音声で追記できます');
+    setTimeout(() => {
+      voiceAppendBtn.removeAttribute('data-tooltip');
+      localStorage.setItem(TOOLTIP_KEY, '1');
+    }, 3000);
+  }
+
   // Focus at end of text
   setTimeout(() => {
     editorTextarea.focus();
@@ -1422,6 +1509,47 @@ importFileInput.addEventListener('change', () => {
 // Voice Memo
 // ============================================================
 
+function setupEngineCallbacks(engine) {
+  engine.onResult = (text, isFinal) => {
+    if (voiceState.cancelled) return;
+    if (!voiceState.recording && isFinal) return; // Ignore late final results after stop
+    if (isFinal) {
+      // Dedup: check recent 3 segments + suffix overlap
+      const segments = voiceState.finalSegments;
+      const recentSegments = segments.slice(-3);
+      const isDuplicate = recentSegments.includes(text);
+      const joinedText = segments.join('');
+      const isSuffixDuplicate = joinedText.length > 0 && text.length > 0 && joinedText.endsWith(text);
+      if (!isDuplicate && !isSuffixDuplicate) {
+        voiceState.finalSegments.push(text);
+      }
+    }
+    renderTranscript(text, isFinal);
+  };
+
+  engine.onError = (error) => {
+    showToast('Voice error: ' + error, 'danger', 4000);
+    stopVoiceMemo();
+  };
+
+  engine.onEnd = () => {
+    if (!voiceState.recording) {
+      processVoiceResult();
+    }
+  };
+}
+
+function startRecordingTimer() {
+  const baseLabel = voiceState.appendMode ? 'Appending...' : 'Recording...';
+  voiceState.timerStart = Date.now();
+  voiceState.timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - voiceState.timerStart) / 1000);
+    const min = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const sec = String(elapsed % 60).padStart(2, '0');
+    voiceStatusLabel.textContent = `${baseLabel} ${min}:${sec}`;
+  }, 1000);
+}
+
 function startVoiceMemo() {
   // Check API key
   if (!settings.geminiApiKey) {
@@ -1432,7 +1560,8 @@ function startVoiceMemo() {
   // Check STT support
   const engine = getSTTEngine();
   if (!engine) {
-    showToast('Voice input is not supported in this browser', 'danger', 4000);
+    const info = getSpeechSupportInfo();
+    showToast(info.message, 'warning', 5000);
     return;
   }
 
@@ -1451,31 +1580,10 @@ function startVoiceMemo() {
   voiceProcessing.hidden = true;
   voiceStopBtn.hidden = false;
   voiceCancelBtn.hidden = false;
-  voiceOverlay.hidden = false;
+  showVoiceOverlay();
 
-  engine.onResult = (text, isFinal) => {
-    if (voiceState.cancelled) return;
-    if (isFinal) {
-      // Dedup: skip if same text as last segment
-      const segments = voiceState.finalSegments;
-      if (segments.length === 0 || segments[segments.length - 1] !== text) {
-        voiceState.finalSegments.push(text);
-      }
-    }
-    renderTranscript(text, isFinal);
-  };
-
-  engine.onError = (error) => {
-    showToast('Voice error: ' + error, 'danger', 4000);
-    stopVoiceMemo();
-  };
-
-  engine.onEnd = () => {
-    if (!voiceState.recording) {
-      processVoiceResult();
-    }
-  };
-
+  setupEngineCallbacks(engine);
+  startRecordingTimer();
   engine.start();
 }
 
@@ -1483,7 +1591,8 @@ function startVoiceAppend() {
   // Check STT support
   const engine = getSTTEngine();
   if (!engine) {
-    showToast('Voice input is not supported in this browser', 'danger', 4000);
+    const info = getSpeechSupportInfo();
+    showToast(info.message, 'warning', 5000);
     return;
   }
 
@@ -1512,30 +1621,11 @@ function startVoiceAppend() {
   voiceProcessing.hidden = true;
   voiceStopBtn.hidden = false;
   voiceCancelBtn.hidden = false;
-  voiceOverlay.hidden = false;
+  voiceOverlay.classList.add('voice-overlay--append');
+  showVoiceOverlay();
 
-  engine.onResult = (text, isFinal) => {
-    if (voiceState.cancelled) return;
-    if (isFinal) {
-      const segments = voiceState.finalSegments;
-      if (segments.length === 0 || segments[segments.length - 1] !== text) {
-        voiceState.finalSegments.push(text);
-      }
-    }
-    renderTranscript(text, isFinal);
-  };
-
-  engine.onError = (error) => {
-    showToast('Voice error: ' + error, 'danger', 4000);
-    stopVoiceMemo();
-  };
-
-  engine.onEnd = () => {
-    if (!voiceState.recording) {
-      processVoiceResult();
-    }
-  };
-
+  setupEngineCallbacks(engine);
+  startRecordingTimer();
   engine.start();
 }
 
@@ -1563,21 +1653,47 @@ function renderTranscript(interimText, isFinal) {
 
 function stopVoiceMemo() {
   voiceState.recording = false;
+
+  // Stop timer
+  if (voiceState.timerInterval) {
+    clearInterval(voiceState.timerInterval);
+    voiceState.timerInterval = null;
+  }
+
+  // Immediate UI update
+  voiceStopBtn.hidden = true;
+  voiceCancelBtn.hidden = true;
+
+  if (voiceState.appendMode) {
+    voiceStatusLabel.textContent = '保存中...';
+  } else {
+    voiceStatus.hidden = true;
+    voiceProcessing.hidden = false;
+  }
+
+  // Stop engine
   if (voiceState.engine) {
     voiceState.engine.stop();
   }
+
+  // Process immediately (don't wait for onend)
+  processVoiceResult();
 }
 
 function cancelVoiceMemo() {
   voiceState.cancelled = true;
   voiceState.recording = false;
+  if (voiceState.timerInterval) {
+    clearInterval(voiceState.timerInterval);
+    voiceState.timerInterval = null;
+  }
   if (voiceState.engine) {
     voiceState.engine.stop();
   }
   if (voiceState.abortController) {
     voiceState.abortController.abort();
   }
-  voiceOverlay.hidden = true;
+  hideVoiceOverlay();
   voiceContext.hidden = true;
   voiceStatusLabel.textContent = 'Recording...';
   resetVoiceState();
@@ -1588,12 +1704,12 @@ async function processVoiceResult() {
   voiceState.processing = true;
 
   if (voiceState.cancelled) {
-    voiceOverlay.hidden = true;
+    hideVoiceOverlay();
     resetVoiceState();
     return;
   }
   if (!getFinalizedText().trim()) {
-    voiceOverlay.hidden = true;
+    hideVoiceOverlay();
     voiceContext.hidden = true;
     voiceStatusLabel.textContent = 'Recording...';
     showToast('No speech detected', 'warning', 3000);
@@ -1610,7 +1726,7 @@ async function processVoiceResult() {
   if (voiceState.appendMode) {
     const targetId = voiceState.appendTargetId;
     const targetNote = data.notes.find((n) => n.id === targetId);
-    voiceOverlay.hidden = true;
+    hideVoiceOverlay();
     voiceContext.hidden = true;
     voiceStatusLabel.textContent = 'Recording...';
     voiceState.engine = null;
@@ -1667,7 +1783,7 @@ async function processVoiceResult() {
     body = getFinalizedText();
   }
 
-  voiceOverlay.hidden = true;
+  hideVoiceOverlay();
   voiceContext.hidden = true;
   voiceStatusLabel.textContent = 'Recording...';
 
@@ -1725,6 +1841,13 @@ function init() {
 
   // Set initial history state
   history.replaceState({ view: 'list' }, '');
+
+  // Grey out voice FAB on unsupported browsers
+  const speechInfo = getSpeechSupportInfo();
+  if (!speechInfo.supported) {
+    voiceFab.style.opacity = '0.5';
+    voiceFab.title = speechInfo.message;
+  }
 
   renderList();
 }

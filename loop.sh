@@ -92,6 +92,7 @@ Claude Code を反復呼び出しし、タスクを自律的に消化します�
   -m, --model MODEL Claude のモデルを指定（デフォルト: sonnet）
   -t, --timeout H   タイムアウト時間（デフォルト: 4）
   --dry-run         実際に claude を呼び出さずにログのみ出力
+  -y, --yes         確認プロンプトをスキップして即座に開始
 
 設定ファイル:
   .ralphrc          ループパラメータの設定ファイル（プロジェクトルートに配置）
@@ -110,6 +111,7 @@ Claude Code を反復呼び出しし、タスクを自律的に消化します�
   bash loop.sh plan 5                 # plan モード、最大5反復
   bash loop.sh build 20 --model opus  # build モード、Opus使用、最大20反復
   bash loop.sh --dry-run build        # 実際には実行せず確認のみ
+  bash loop.sh --yes build 10         # 確認なしで即座に開始
 HELP
 }
 
@@ -170,6 +172,23 @@ show_progress() {
 # 前提条件チェック
 # ---------------------------------------------------------------------------
 check_prerequisites() {
+    # ネストセッション検出
+    # Claude Code セッション内から loop.sh を実行すると、内部の claude --print が
+    # 「Claude Code cannot be launched inside another Claude Code session」エラーで失敗する。
+    # 環境変数 CLAUDECODE=1 は Claude Code セッション内で自動的に設定される。
+    if [[ "${CLAUDECODE:-}" == "1" ]]; then
+        die "Claude Code セッション内から loop.sh を実行することはできません。
+  loop.sh は内部で claude --print を呼び出すため、ネストされたセッションがブロックされます。
+
+  解決方法:
+    1. Claude Code セッションを終了する
+    2. 通常のターミナルから実行する:
+       cd $(pwd) && bash loop.sh ${MODE} ${MAX_ITERATIONS}
+
+  または Claude Code セッション内で /build（--loop なし）を使用してください。
+  /build はセッション内で直接タスクを実行するため、ネストの問題が発生しません。"
+    fi
+
     # claude CLI の存在確認
     if ! command -v claude &>/dev/null; then
         die "claude CLI が見つかりません。インストールしてください: https://docs.anthropic.com/claude-code"
@@ -464,6 +483,166 @@ auto_commit() {
 }
 
 # ---------------------------------------------------------------------------
+# オーケストレーション: 計画サマリー・コスト見積もり・確認・事後レビュー
+# ---------------------------------------------------------------------------
+
+# IMPLEMENTATION_PLAN.md の進捗状況を表示する
+show_plan_summary() {
+    if [[ ! -f "${IMPLEMENTATION_PLAN}" ]]; then
+        return 0
+    fi
+
+    local total_done=0
+    local total_todo=0
+    total_done="$(grep -c '^\- \[x\]' "${IMPLEMENTATION_PLAN}" 2>/dev/null || echo 0)"
+    total_todo="$(grep -c '^\- \[ \]' "${IMPLEMENTATION_PLAN}" 2>/dev/null || echo 0)"
+    local total_tasks=$((total_done + total_todo))
+
+    # マイルストーンの状態をカウント
+    local ms_completed=0
+    local ms_in_progress=0
+    local ms_pending=0
+    ms_completed="$(grep -c 'status:.*completed' "${IMPLEMENTATION_PLAN}" 2>/dev/null || echo 0)"
+    ms_in_progress="$(grep -c 'status:.*in_progress' "${IMPLEMENTATION_PLAN}" 2>/dev/null || echo 0)"
+    ms_pending="$(grep -c 'status:.*pending' "${IMPLEMENTATION_PLAN}" 2>/dev/null || echo 0)"
+    local ms_total=$((ms_completed + ms_in_progress + ms_pending))
+
+    echo ""
+    log "--------------------------------------------"
+    log "  計画サマリー"
+    log "--------------------------------------------"
+    log "タスク進捗:     ${total_done}/${total_tasks} 完了 (残り ${total_todo})"
+    if [[ ${ms_total} -gt 0 ]]; then
+        log "マイルストーン: 完了=${ms_completed} 進行中=${ms_in_progress} 未着手=${ms_pending}"
+    fi
+
+    # 次に実行する未完了タスク上位3件を表示
+    local next_tasks
+    next_tasks="$(grep '^\- \[ \]' "${IMPLEMENTATION_PLAN}" 2>/dev/null | head -3 || true)"
+    if [[ -n "${next_tasks}" ]]; then
+        log "次のタスク:"
+        echo "${next_tasks}" | while IFS= read -r line; do
+            log "  ${line}"
+        done
+    fi
+    log "--------------------------------------------"
+
+    # AGENTS.md のプロジェクト情報セクションが記入されているかチェック
+    if [[ -f "${AGENTS_MD}" ]]; then
+        # プロジェクト情報セクションが空（ヘッダーのみ or placeholder のみ）かチェック
+        local agents_content
+        agents_content="$(cat "${AGENTS_MD}")"
+        # ファイルが100バイト未満なら実質未記入とみなす
+        local agents_size
+        agents_size="$(wc -c < "${AGENTS_MD}" | tr -d ' ')"
+        if [[ ${agents_size} -lt 100 ]]; then
+            log ""
+            log "[WARNING] AGENTS.md のプロジェクト情報が未記入です。"
+            log "  プロジェクト規約やコーディングスタイルが反映されない可能性があります。"
+        fi
+    fi
+}
+
+# モデル × 反復数で概算コストを計算・表示する
+estimate_cost() {
+    local model="${CLAUDE_MODEL}"
+    local iterations="${MAX_ITERATIONS}"
+
+    local cost_per_iter=0
+    local model_label=""
+    case "${model}" in
+        haiku*)
+            cost_per_iter="0.05"
+            model_label="Haiku"
+            ;;
+        sonnet*)
+            cost_per_iter="0.50"
+            model_label="Sonnet"
+            ;;
+        opus*)
+            cost_per_iter="2.50"
+            model_label="Opus"
+            ;;
+        *)
+            cost_per_iter="0.50"
+            model_label="${model}"
+            ;;
+    esac
+
+    # bc が使えればそちらで計算、なければ awk
+    local total_cost=""
+    if command -v bc &>/dev/null; then
+        total_cost="$(echo "${cost_per_iter} * ${iterations}" | bc)"
+    else
+        total_cost="$(awk "BEGIN { printf \"%.2f\", ${cost_per_iter} * ${iterations} }")"
+    fi
+
+    log "推定コスト:     ~\$${cost_per_iter}/反復 x ${iterations}反復 = ~\$${total_cost} (${model_label})"
+}
+
+# 設定サマリーを表示し、確認を求める
+confirm_start() {
+    # --yes フラグが指定されていればスキップ
+    if [[ "${SKIP_CONFIRM}" == "true" ]]; then
+        log "(--yes が指定されたため確認をスキップ)"
+        return 0
+    fi
+
+    # --dry-run の場合も確認不要
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        return 0
+    fi
+
+    echo ""
+    read -r -p "[$(timestamp)] 開始しますか? [y/N] " answer
+    case "${answer}" in
+        [yY]|[yY][eE][sS])
+            return 0
+            ;;
+        *)
+            log "ユーザーによりキャンセルされました。"
+            exit 0
+            ;;
+    esac
+}
+
+# ループ完了後の事後レビューを表示する
+show_post_loop_review() {
+    echo ""
+    log "--------------------------------------------"
+    log "  事後レビュー"
+    log "--------------------------------------------"
+
+    # IMPLEMENTATION_PLAN.md の最終タスク進捗
+    if [[ -f "${IMPLEMENTATION_PLAN}" ]]; then
+        local final_done=0
+        local final_todo=0
+        final_done="$(grep -c '^\- \[x\]' "${IMPLEMENTATION_PLAN}" 2>/dev/null || echo 0)"
+        final_todo="$(grep -c '^\- \[ \]' "${IMPLEMENTATION_PLAN}" 2>/dev/null || echo 0)"
+        local final_total=$((final_done + final_todo))
+        log "最終タスク進捗: ${final_done}/${final_total} 完了 (残り ${final_todo})"
+    fi
+
+    # AUTO_COMMIT=true なら変更ファイル一覧とコミット履歴を表示
+    if [[ "${AUTO_COMMIT}" == "true" ]] && command -v git &>/dev/null; then
+        if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
+            echo ""
+            log "変更ファイル一覧:"
+            git -C "${SCRIPT_DIR}" diff --stat HEAD~"$(git -C "${SCRIPT_DIR}" rev-list --count HEAD 2>/dev/null || echo 1)" 2>/dev/null || \
+                git -C "${SCRIPT_DIR}" diff --stat 2>/dev/null || \
+                log "  (差分情報を取得できませんでした)"
+
+            echo ""
+            log "ループ中のコミット履歴:"
+            git -C "${SCRIPT_DIR}" log --oneline -20 2>/dev/null || \
+                log "  (コミット履歴を取得できませんでした)"
+        fi
+    fi
+
+    log "--------------------------------------------"
+}
+
+# ---------------------------------------------------------------------------
 # ログ管理
 # ---------------------------------------------------------------------------
 setup_log_dir() {
@@ -508,6 +687,7 @@ invoke_claude() {
 # 引数パース
 # ---------------------------------------------------------------------------
 DRY_RUN=false
+SKIP_CONFIRM=false
 MODE="build"
 POSITIONAL_ARGS=()
 
@@ -532,6 +712,10 @@ parse_args() {
                 ;;
             --dry-run)
                 DRY_RUN=true
+                shift
+                ;;
+            -y|--yes)
+                SKIP_CONFIRM=true
                 shift
                 ;;
             plan|build)
@@ -568,11 +752,22 @@ main() {
     log "品質ゲート:     ${QUALITY_GATE_ENABLED}"
     log "ログ出力先:     ${LOG_DIR}"
     log "Dry Run:        ${DRY_RUN}"
+    log "確認スキップ:   ${SKIP_CONFIRM}"
     log "============================================"
 
     # 前提条件チェック
     check_prerequisites
     check_prompt_files "${MODE}"
+
+    # 計画サマリー表示
+    show_plan_summary
+
+    # コスト見積もり表示
+    estimate_cost
+
+    # 確認プロンプト
+    confirm_start
+
     setup_log_dir
 
     # Git ブランチ作成
@@ -684,6 +879,9 @@ main() {
         # Discord 通知（timeout = 反復上限到達）
         send_discord_notify "${MAX_ITERATIONS}" "timeout" ""
     fi
+
+    # 事後レビュー
+    show_post_loop_review
 }
 
 # ---------------------------------------------------------------------------

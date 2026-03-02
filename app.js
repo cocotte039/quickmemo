@@ -29,6 +29,7 @@ const voiceState = {
   appendTargetId: null,
   appendCursorPos: null,
   abortController: null,
+  processing: false,
 };
 
 function resetVoiceState() {
@@ -40,6 +41,7 @@ function resetVoiceState() {
   voiceState.appendTargetId = null;
   voiceState.appendCursorPos = null;
   voiceState.abortController = null;
+  voiceState.processing = false;
 }
 
 function getFinalizedText() {
@@ -1582,6 +1584,9 @@ function cancelVoiceMemo() {
 }
 
 async function processVoiceResult() {
+  if (voiceState.processing) return;
+  voiceState.processing = true;
+
   if (voiceState.cancelled) {
     voiceOverlay.hidden = true;
     resetVoiceState();
@@ -1591,8 +1596,8 @@ async function processVoiceResult() {
     voiceOverlay.hidden = true;
     voiceContext.hidden = true;
     voiceStatusLabel.textContent = 'Recording...';
-    voiceState.engine = null;
     showToast('No speech detected', 'warning', 3000);
+    resetVoiceState();
     return;
   }
 
@@ -1665,7 +1670,6 @@ async function processVoiceResult() {
   voiceOverlay.hidden = true;
   voiceContext.hidden = true;
   voiceStatusLabel.textContent = 'Recording...';
-  voiceState.engine = null;
 
   // Create new memo and open editor
   const now = new Date().toISOString();
@@ -1681,6 +1685,7 @@ async function processVoiceResult() {
   };
   data.notes.push(note);
   saveData();
+  resetVoiceState();
   openEditor(note.id);
 }
 

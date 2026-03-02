@@ -1,3 +1,6 @@
 analysis-*.md
 PLAN.md
 VERIFY.md
+
+# Session Loop Framework - ループログ
+.claude/loop/logs/

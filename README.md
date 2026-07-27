@@ -6,17 +6,33 @@ A lightweight, offline-first memo PWA. No server, no account — your notes stay
 
 ## Features
 
+- **Three buckets** — **Inbox** for quick throwaway notes, **Keep** for what you want to come back to, **Archive** for what should be out of sight
 - **Offline-first** — Works without internet via Service Worker
 - **Auto-save** — Saves as you type (500ms debounce)
 - **Voice memo** — Tap the mic FAB → speak → auto-summarize with Gemini → save as Markdown note
-- **Swipe actions** — Swipe left to archive; swipe left in Archive to delete
+- **Swipe actions** — Swipe left to archive, right to move between Inbox and Keep; in Archive, left deletes and right restores
 - **Bulk delete** — Delete all archived memos at once with a single tap
-- **Undo** — Toast with undo button on archive/delete (including bulk delete)
-- **Markdown toolbar** — Quick-insert `#`, `-`, `>`, `` ` ``, `**`
+- **Undo** — Toast with undo button on every move, archive, restore, and delete (including bulk delete)
+- **Markdown toolbar** — Quick-insert `#`, `-`, `>`, `` ` ``, `**`, `---`
 - **Copy** — One-tap copy from list or editor
 - **JSON export / import** — Backup and restore notes as JSON files
 - **Installable** — Add to home screen for a standalone app experience
 - **Dark theme** — GitHub-dark inspired palette with monospace editor
+
+## Inbox / Keep / Archive
+
+Every memo lives in exactly one of three buckets.
+
+| Bucket | What it is for | How to get there |
+|---|---|---|
+| **Inbox** | Temporary notes. New memos land here. | Swipe right on a Keep memo, or restore an archived one |
+| **Keep** | Notes worth referring back to later | Swipe right on an Inbox memo, or tap the status pill in the editor |
+| **Archive** | Out of sight, still recoverable | Swipe left from either tab |
+
+- Archive is not a tab — open it from the menu (⋮ → **Archive**), which also shows how many memos are in it
+- Restoring an archived memo sends it back to the bucket it came from
+- The editor header shows a pill with the current bucket; tap it to switch between Inbox and Keep
+- Every one of these moves shows an undo toast
 
 ## Voice Memo
 
@@ -66,11 +82,17 @@ All data is stored in your browser's `localStorage`. **Nothing is sent to any se
 
 Notes live only in your browser's `localStorage`. There is no cloud sync. Clearing browser data will delete your notes.
 
-- **Export**: Menu → Export JSON to download a backup file
-- **Import**: Menu → Import JSON to restore from a backup. Duplicate notes are merged by keeping the newer version. A backup is automatically exported before import.
+- **Export**: Menu → Export JSON to download a backup file (format `version: 2`)
+- **Import**: Menu → Import JSON to restore from a backup. Both `version: 1` (pre-buckets, `archived` flag) and `version: 2` (`status` field) files are accepted — v1 notes land in Inbox or Archive. Duplicate notes are merged by keeping the newer version. A backup is automatically exported before import.
 - **Storage monitor**: Settings screen shows current localStorage usage with a visual bar. Warning colors appear at 50% and 80% capacity.
 
 > If storage becomes full, the app warns you before leaving the page to prevent data loss.
+
+### Storage format
+
+Notes are stored as `version: 2` and migrated automatically on first launch after the update: the old `archived: true/false` flag becomes `status: 'archived' | 'inbox'`, so existing notes appear in **Inbox**.
+
+> **Downgrading**: an older build of the app only reads `version: 1` and will show an empty list against v2 data (the data itself is untouched in `localStorage`). If you need to roll back, export a JSON backup first and import it into the older build.
 
 ## License
 

@@ -10,11 +10,13 @@ const DEBOUNCE_MS = 500;
 const SWIPE_THRESHOLD = 80;
 const SWIPE_ANGLE_LIMIT = 30; // degrees
 const VALID_COLORS = ['blue', 'green', 'amber', 'rose', 'purple'];
+const DATA_VERSION = 2;
+const VALID_STATUSES = ['inbox', 'keep', 'archived'];
 
 // --- State ---
-let data = { version: 1, notes: [] };
+let data = { version: DATA_VERSION, notes: [] };
 let settings = { geminiApiKey: '' };
-let currentTab = 'active';   // 'active' | 'archived'
+let currentTab = 'inbox';    // 'inbox' | 'keep'
 let currentNoteId = null;
 let saveTimerId = null;
 let toastTimerId = null;
@@ -92,28 +94,72 @@ const colorDotIndicator = document.getElementById('color-dot-indicator');
 const colorPicker   = document.getElementById('color-picker');
 const voiceAppendBtn = document.getElementById('voice-append-btn');
 const saveIndicator = document.getElementById('save-indicator');
+const statusBtn     = document.getElementById('status-btn');
 const toastEl       = document.getElementById('toast');
 const toastMessage  = document.getElementById('toast-message');
 const toastAction   = document.getElementById('toast-action');
 const tabs          = document.querySelectorAll('.tab');
-const archiveBadge  = document.getElementById('archive-badge');
+const archiveView   = document.getElementById('archive-view');
+const archiveListEl = document.getElementById('archive-list');
+const archiveEmptyStateEl = document.getElementById('archive-empty-state');
+const archiveBackBtn = document.getElementById('archive-back-btn');
+const archiveMenuBtn = document.getElementById('archive-menu-btn');
 
 // ============================================================
 // Storage
 // ============================================================
+
+// Normalize a note from any supported version (v1: archived boolean, v2: status).
+// Returns null if the object is not a usable note.
+function normalizeNote(note) {
+  if (!note || typeof note !== 'object' || !note.id) return null;
+
+  let status = VALID_STATUSES.includes(note.status) ? note.status : null;
+  if (!status) {
+    // v1 fallback: archived boolean
+    status = note.archived === true ? 'archived' : 'inbox';
+  }
+
+  const archivedFrom = note.archivedFrom === 'keep' ? 'keep'
+    : note.archivedFrom === 'inbox' ? 'inbox'
+    : status === 'archived' ? 'inbox'
+    : null;
+
+  const now = new Date().toISOString();
+  const normalized = {
+    id: note.id,
+    title: typeof note.title === 'string' ? note.title : '',
+    body: typeof note.body === 'string' ? note.body : '',
+    status: status,
+    archivedFrom: archivedFrom,
+    pinned: note.pinned === true,
+    color: getValidColor(note.color),
+    createdAt: note.createdAt || now,
+    updatedAt: note.updatedAt || note.createdAt || now,
+  };
+  return normalized;
+}
 
 function loadData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.version === 1 && Array.isArray(parsed.notes)) {
-        data = parsed;
+      if (parsed && Array.isArray(parsed.notes) && parsed.version >= 1 && parsed.version <= DATA_VERSION) {
+        const notes = [];
+        for (const note of parsed.notes) {
+          const normalized = normalizeNote(note);
+          if (normalized) notes.push(normalized);
+        }
+        data = { version: DATA_VERSION, notes: notes };
+        if (parsed.version !== DATA_VERSION) {
+          saveData(); // persist the migration
+        }
       }
     }
   } catch (e) {
     // Corrupted data; start fresh
-    data = { version: 1, notes: [] };
+    data = { version: DATA_VERSION, notes: [] };
   }
 }
 
@@ -303,16 +349,15 @@ function formatDate(isoStr) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function getFilteredNotes() {
-  const isArchived = currentTab === 'archived';
-  const filtered = data.notes.filter((n) => n.archived === isArchived);
+function getNotesByStatus(status) {
+  const filtered = data.notes.filter((n) => n.status === status);
 
-  if (isArchived) {
-    // Archive tab: sort by updatedAt only (no pin sorting)
+  if (status === 'archived') {
+    // Archive: sort by updatedAt only (no pin sorting)
     return filtered.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   }
 
-  // Active tab: pinned first, then by updatedAt
+  // Inbox / Keep: pinned first, then by updatedAt
   return filtered.sort((a, b) => {
     const aPinned = a.pinned === true ? 1 : 0;
     const bPinned = b.pinned === true ? 1 : 0;
@@ -329,24 +374,37 @@ function getValidColor(color) {
 // Render list
 // ============================================================
 
-function renderList() {
-  memoListEl.textContent = '';
-  const notes = getFilteredNotes();
-
-  updateArchiveBadge();
-
-  if (notes.length === 0) {
-    emptyStateEl.classList.add('empty-state--visible');
-    emptyText.textContent = currentTab === 'active'
-      ? 'No memos yet. Tap + to create one.'
-      : 'No archived memos.';
-    return;
+// Swipe action mapping per list. `left` is the background at the left edge
+// (revealed by a right swipe), `right` is at the right edge (left swipe).
+function getSwipeConfig(status) {
+  if (status === 'archived') {
+    return {
+      left:  { label: 'Restore', cls: 'swipe-background--restore', action: 'restore' },
+      right: { label: 'Delete',  cls: 'swipe-background--delete',  action: 'delete' },
+    };
   }
+  if (status === 'keep') {
+    return {
+      left:  { label: 'Inbox',   cls: 'swipe-background--demote',  action: 'inbox' },
+      right: { label: 'Archive', cls: 'swipe-background--archive', action: 'archive' },
+    };
+  }
+  return {
+    left:  { label: 'Keep',    cls: 'swipe-background--keep',    action: 'keep' },
+    right: { label: 'Archive', cls: 'swipe-background--archive', action: 'archive' },
+  };
+}
 
-  emptyStateEl.classList.remove('empty-state--visible');
+function renderNotes(container, status) {
+  container.textContent = '';
+  const notes = getNotesByStatus(status);
 
-  // "Delete All" bar for Archive tab
-  if (currentTab === 'archived') {
+  if (notes.length === 0) return;
+
+  const swipeConfig = getSwipeConfig(status);
+
+  // "Delete All" bar for Archive
+  if (status === 'archived') {
     const deleteAllBar = document.createElement('div');
     deleteAllBar.className = 'delete-all-bar';
     const deleteAllBtn = document.createElement('button');
@@ -354,14 +412,14 @@ function renderList() {
     deleteAllBtn.textContent = 'Delete All (' + notes.length + ')';
     deleteAllBtn.addEventListener('click', () => deleteAllArchived());
     deleteAllBar.appendChild(deleteAllBtn);
-    memoListEl.appendChild(deleteAllBar);
+    container.appendChild(deleteAllBar);
   }
 
   // Track pin transition for divider
   let lastWasPinned = false;
   let needsDivider = false;
 
-  if (currentTab === 'active') {
+  if (status !== 'archived') {
     const hasPinned = notes.some((n) => n.pinned === true);
     const hasUnpinned = notes.some((n) => n.pinned !== true);
     needsDivider = hasPinned && hasUnpinned;
@@ -371,28 +429,32 @@ function renderList() {
     const isPinned = note.pinned === true;
 
     // Insert divider between pinned and unpinned groups
-    if (currentTab === 'active' && needsDivider && lastWasPinned && !isPinned) {
+    if (status !== 'archived' && needsDivider && lastWasPinned && !isPinned) {
       const divider = document.createElement('div');
       divider.className = 'memo-list__pin-divider';
-      memoListEl.appendChild(divider);
+      container.appendChild(divider);
     }
     lastWasPinned = isPinned;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'memo-item-wrapper';
 
-    // Swipe background
-    const swipeBg = document.createElement('div');
-    if (currentTab === 'active') {
-      swipeBg.className = 'swipe-background swipe-background--archive';
-    } else {
-      swipeBg.className = 'swipe-background swipe-background--delete';
-    }
-    const swipeIcon = document.createElement('span');
-    swipeIcon.className = 'swipe-background__icon';
-    swipeIcon.textContent = currentTab === 'active' ? 'Archive' : 'Delete';
-    swipeBg.appendChild(swipeIcon);
-    wrapper.appendChild(swipeBg);
+    // Swipe backgrounds: left edge (right swipe) and right edge (left swipe)
+    const swipeBgLeft = document.createElement('div');
+    swipeBgLeft.className = 'swipe-background swipe-background--left ' + swipeConfig.left.cls;
+    const swipeIconLeft = document.createElement('span');
+    swipeIconLeft.className = 'swipe-background__icon';
+    swipeIconLeft.textContent = swipeConfig.left.label;
+    swipeBgLeft.appendChild(swipeIconLeft);
+    wrapper.appendChild(swipeBgLeft);
+
+    const swipeBgRight = document.createElement('div');
+    swipeBgRight.className = 'swipe-background swipe-background--right ' + swipeConfig.right.cls;
+    const swipeIconRight = document.createElement('span');
+    swipeIconRight.className = 'swipe-background__icon';
+    swipeIconRight.textContent = swipeConfig.right.label;
+    swipeBgRight.appendChild(swipeIconRight);
+    wrapper.appendChild(swipeBgRight);
 
     // Memo item
     const item = document.createElement('div');
@@ -409,7 +471,7 @@ function renderList() {
     const titleRow = document.createElement('div');
     titleRow.className = 'memo-item__title-row';
 
-    if (currentTab === 'active' && isPinned) {
+    if (status !== 'archived' && isPinned) {
       const pinIcon = document.createElement('span');
       pinIcon.className = 'memo-item__pin';
       const pinSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -458,8 +520,8 @@ function renderList() {
     dateEl.textContent = formatDate(note.updatedAt);
     item.appendChild(dateEl);
 
-    // Action button: restore for archived, copy for active
-    if (currentTab === 'archived') {
+    // Action button: restore for archived, copy otherwise
+    if (status === 'archived') {
       const restoreBtn = document.createElement('button');
       restoreBtn.className = 'memo-item__restore';
       restoreBtn.setAttribute('aria-label', 'Restore');
@@ -483,7 +545,8 @@ function renderList() {
 
       restoreBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        unarchiveNote(note.id);
+        restoreNote(note.id);
+        renderArchive();
       });
 
       item.appendChild(restoreBtn);
@@ -529,38 +592,54 @@ function renderList() {
     wrapper.appendChild(item);
 
     // Swipe handling
-    setupSwipe(wrapper, item, note);
+    setupSwipe(wrapper, item, note, swipeConfig);
 
-    memoListEl.appendChild(wrapper);
+    container.appendChild(wrapper);
   });
 }
 
+function renderList() {
+  renderNotes(memoListEl, currentTab);
+  updateEmptyState();
+  updateArchiveMenuLabel();
+}
+
+function renderArchive() {
+  renderNotes(archiveListEl, 'archived');
+  updateEmptyState();
+  updateArchiveMenuLabel();
+}
+
+// Re-render both lists (used after an action that may affect either)
+function renderAll() {
+  renderList();
+  renderArchive();
+}
+
 // ============================================================
-// Archive badge
+// Archive menu label
 // ============================================================
 
-function updateArchiveBadge() {
-  const archivedCount = data.notes.filter((n) => n.archived === true).length;
-  if (archivedCount > 0) {
-    archiveBadge.textContent = '(' + archivedCount + ')';
-    archiveBadge.hidden = false;
-  } else {
-    archiveBadge.hidden = true;
-  }
+function updateArchiveMenuLabel() {
+  const archivedCount = data.notes.filter((n) => n.status === 'archived').length;
+  archiveMenuBtn.textContent = archivedCount > 0
+    ? 'Archive (' + archivedCount + ')'
+    : 'Archive';
 }
 
 // ============================================================
 // Swipe
 // ============================================================
 
-function setupSwipe(wrapper, itemEl, note) {
+function setupSwipe(wrapper, itemEl, note, swipeConfig) {
   let startX = 0;
   let startY = 0;
   let currentX = 0;
   let swiping = false;
   let directionLocked = false;
 
-  const swipeBg = wrapper.querySelector('.swipe-background');
+  const swipeBgLeft = wrapper.querySelector('.swipe-background--left');
+  const swipeBgRight = wrapper.querySelector('.swipe-background--right');
 
   itemEl.addEventListener('touchstart', (e) => {
     const touch = e.touches[0];
@@ -595,18 +674,24 @@ function setupSwipe(wrapper, itemEl, note) {
 
     e.preventDefault();
 
-    // Only allow left swipe (negative deltaX)
-    if (deltaX > 0) {
-      currentX = 0;
-    } else {
-      currentX = deltaX;
-    }
+    // Both directions are allowed
+    currentX = deltaX;
 
     itemEl.style.transform = 'translateX(' + currentX + 'px)';
 
-    // Show/update swipe background
+    // Reveal the background on the side the item is moving away from
     const progress = Math.min(Math.abs(currentX) / SWIPE_THRESHOLD, 1);
-    swipeBg.style.opacity = String(0.3 + progress * 0.7);
+    const opacity = String(0.3 + progress * 0.7);
+    if (currentX < 0) {
+      swipeBgRight.style.opacity = opacity;
+      swipeBgLeft.style.opacity = '0';
+    } else if (currentX > 0) {
+      swipeBgLeft.style.opacity = opacity;
+      swipeBgRight.style.opacity = '0';
+    } else {
+      swipeBgLeft.style.opacity = '0';
+      swipeBgRight.style.opacity = '0';
+    }
 
     if (Math.abs(currentX) >= SWIPE_THRESHOLD && !itemEl.dataset.vibrated) {
       if (navigator.vibrate) {
@@ -627,9 +712,11 @@ function setupSwipe(wrapper, itemEl, note) {
 
     if (Math.abs(currentX) >= SWIPE_THRESHOLD) {
       // Confirm swipe
+      const action = currentX < 0 ? swipeConfig.right.action : swipeConfig.left.action;
+
       itemEl.classList.add('memo-item--swiped');
       itemEl.style.transition = '';
-      itemEl.style.transform = 'translateX(-100vw)';
+      itemEl.style.transform = currentX < 0 ? 'translateX(-100vw)' : 'translateX(100vw)';
 
       itemEl.addEventListener('transitionend', function handler() {
         itemEl.removeEventListener('transitionend', handler);
@@ -645,16 +732,13 @@ function setupSwipe(wrapper, itemEl, note) {
         });
       }, { once: true });
 
-      if (currentTab === 'active') {
-        archiveNote(note.id);
-      } else {
-        deleteNote(note.id);
-      }
+      runSwipeAction(action, note.id);
     } else {
       // Snap back
       itemEl.style.transition = '';
       itemEl.style.transform = 'translateX(0)';
-      swipeBg.style.opacity = '0';
+      swipeBgLeft.style.opacity = '0';
+      swipeBgRight.style.opacity = '0';
     }
 
     swiping = false;
@@ -666,33 +750,88 @@ function setupSwipe(wrapper, itemEl, note) {
 // Archive / Delete / Unarchive with Undo
 // ============================================================
 
+function runSwipeAction(action, id) {
+  switch (action) {
+    case 'archive': archiveNote(id); break;
+    case 'keep':    moveNote(id, 'keep'); break;
+    case 'inbox':   moveNote(id, 'inbox'); break;
+    case 'restore': restoreNote(id); break;
+    case 'delete':  deleteNote(id); break;
+  }
+}
+
+// Move a note between inbox and keep, with undo.
+function moveNote(id, newStatus) {
+  const note = data.notes.find((n) => n.id === id);
+  if (!note) return;
+
+  const prevStatus = note.status;
+  const prevArchivedFrom = note.archivedFrom;
+  if (prevStatus === newStatus) return;
+
+  note.status = newStatus;
+  note.archivedFrom = null;
+  note.updatedAt = new Date().toISOString();
+  saveData();
+
+  const message = newStatus === 'keep' ? 'Kept' : 'Moved to Inbox';
+  showToast(message, 'success', 4000, 'Undo', () => {
+    note.status = prevStatus;
+    note.archivedFrom = prevArchivedFrom;
+    note.updatedAt = new Date().toISOString();
+    saveData();
+    renderAll();
+  });
+
+  updateEmptyState();
+  updateArchiveMenuLabel();
+}
+
 function archiveNote(id) {
   const note = data.notes.find((n) => n.id === id);
   if (!note) return;
 
-  note.archived = true;
+  const prevStatus = note.status;
+  note.status = 'archived';
+  note.archivedFrom = prevStatus === 'keep' ? 'keep' : 'inbox';
   note.updatedAt = new Date().toISOString();
   saveData();
 
   showToast('Archived', 'warning', 4000, 'Undo', () => {
-    note.archived = false;
+    note.status = prevStatus;
+    note.archivedFrom = null;
     note.updatedAt = new Date().toISOString();
     saveData();
-    renderList();
+    renderAll();
   });
 
   updateEmptyState();
+  updateArchiveMenuLabel();
+  renderArchive();
 }
 
-function unarchiveNote(id) {
+// Restore an archived note to wherever it came from.
+function restoreNote(id) {
   const note = data.notes.find((n) => n.id === id);
   if (!note) return;
 
-  note.archived = false;
+  const target = note.archivedFrom === 'keep' ? 'keep' : 'inbox';
+  note.status = target;
+  note.archivedFrom = null;
   note.updatedAt = new Date().toISOString();
   saveData();
 
-  showToast('Restored', 'success', 3000);
+  const label = target === 'keep' ? 'Restored to Keep' : 'Restored to Inbox';
+  showToast(label, 'success', 4000, 'Undo', () => {
+    note.status = 'archived';
+    note.archivedFrom = target;
+    note.updatedAt = new Date().toISOString();
+    saveData();
+    renderAll();
+  });
+
+  updateEmptyState();
+  updateArchiveMenuLabel();
   renderList();
 }
 
@@ -706,40 +845,46 @@ function deleteNote(id) {
   showToast('Deleted', 'danger', 5000, 'Undo', () => {
     data.notes.push(removed);
     saveData();
-    renderList();
+    renderAll();
   });
 
   updateEmptyState();
+  updateArchiveMenuLabel();
 }
 
 function deleteAllArchived() {
-  const archived = data.notes.filter((n) => n.archived === true);
+  const archived = data.notes.filter((n) => n.status === 'archived');
   if (archived.length === 0) return;
 
   const count = archived.length;
   if (!confirm(count + ' archived memo(s) will be permanently deleted. Continue?')) return;
 
   const removedNotes = [...archived];
-  data.notes = data.notes.filter((n) => n.archived !== true);
+  data.notes = data.notes.filter((n) => n.status !== 'archived');
   saveData();
-  renderList();
+  renderArchive();
 
   showToast('Deleted ' + count + ' memo(s)', 'danger', 5000, 'Undo', () => {
     data.notes.push(...removedNotes);
     saveData();
-    renderList();
+    renderAll();
   });
 }
 
 function updateEmptyState() {
-  const notes = getFilteredNotes();
-  if (notes.length === 0) {
+  if (getNotesByStatus(currentTab).length === 0) {
     emptyStateEl.classList.add('empty-state--visible');
-    emptyText.textContent = currentTab === 'active'
+    emptyText.textContent = currentTab === 'inbox'
       ? 'No memos yet. Tap + to create one.'
-      : 'No archived memos.';
+      : 'Nothing kept yet. Swipe right on a memo to keep it.';
   } else {
     emptyStateEl.classList.remove('empty-state--visible');
+  }
+
+  if (getNotesByStatus('archived').length === 0) {
+    archiveEmptyStateEl.classList.add('empty-state--visible');
+  } else {
+    archiveEmptyStateEl.classList.remove('empty-state--visible');
   }
 }
 
@@ -834,6 +979,9 @@ function openEditor(id) {
   // Update pin button state
   updatePinButtonState(note.pinned === true);
 
+  // Update status toggle
+  updateStatusButton(note.status);
+
   // Update color indicator
   updateColorIndicator(getValidColor(note.color));
 
@@ -864,7 +1012,8 @@ function closeEditor() {
   editView.classList.remove('view-editor--active');
   listView.classList.remove('view-list--behind');
   currentNoteId = null;
-  renderList();
+  // The note may have been edited from either list
+  renderAll();
 }
 
 function saveCurrentNote() {
@@ -937,6 +1086,42 @@ pinBtn.addEventListener('click', () => {
   saveData();
   updatePinButtonState(note.pinned === true);
   flashSaveIndicator();
+});
+
+// ============================================================
+// Status toggle (Inbox / Keep)
+// ============================================================
+
+function updateStatusButton(status) {
+  statusBtn.classList.remove('header__status--keep');
+  if (status === 'archived') {
+    statusBtn.textContent = 'Archived';
+    statusBtn.disabled = true;
+    return;
+  }
+  statusBtn.disabled = false;
+  if (status === 'keep') {
+    statusBtn.textContent = 'Keep';
+    statusBtn.classList.add('header__status--keep');
+  } else {
+    statusBtn.textContent = 'Inbox';
+  }
+}
+
+statusBtn.addEventListener('click', () => {
+  if (!currentNoteId) return;
+  const note = data.notes.find((n) => n.id === currentNoteId);
+  if (!note || note.status === 'archived') return;
+
+  const newStatus = note.status === 'keep' ? 'inbox' : 'keep';
+  note.status = newStatus;
+  note.archivedFrom = null;
+  note.updatedAt = new Date().toISOString();
+  saveData();
+
+  updateStatusButton(newStatus);
+  flashSaveIndicator();
+  showToast(newStatus === 'keep' ? 'Kept' : 'Moved to Inbox', 'success', 2000);
 });
 
 // ============================================================
@@ -1041,6 +1226,37 @@ function closeSettings() {
   settingsView.classList.remove('view-editor--active');
   listView.classList.remove('view-list--behind');
 }
+
+// ============================================================
+// Archive view
+// ============================================================
+
+function openArchive() {
+  renderArchive();
+  archiveView.classList.add('view-editor--active');
+  listView.classList.add('view-list--behind');
+  history.pushState({ view: 'archive' }, '');
+}
+
+function closeArchive() {
+  archiveView.classList.remove('view-editor--active');
+  listView.classList.remove('view-list--behind');
+  renderList();
+}
+
+archiveBackBtn.addEventListener('click', () => {
+  if (history.state && history.state.view === 'archive') {
+    history.back();
+  } else {
+    closeArchive();
+  }
+});
+
+archiveMenuBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  dropdownMenu.hidden = true;
+  openArchive();
+});
 
 settingsBackBtn.addEventListener('click', () => {
   if (history.state && history.state.view === 'settings') {
@@ -1192,17 +1408,30 @@ function handleMarkdownInsert(action) {
       cursorOffset = 2;
       break;
     }
-    case 'home': {
-      const homeLineStart = val.lastIndexOf('\n', start - 1) + 1;
-      ta.selectionStart = ta.selectionEnd = homeLineStart;
+    case 'hr': {
+      const before = val.substring(0, start);
+      const after = val.substring(end);
+
+      // A blank line must precede "---", otherwise Markdown reads the
+      // previous line as a setext heading instead of a horizontal rule.
+      let prefix = '';
+      if (before.length > 0) {
+        if (!before.endsWith('\n')) {
+          prefix = '\n\n';
+        } else if (!before.endsWith('\n\n')) {
+          prefix = '\n';
+        }
+      }
+
+      const rule = prefix + '---\n';
+      // Keep following content on its own line
+      const suffix = (after.length > 0 && !after.startsWith('\n')) ? '\n' : '';
+
+      ta.value = before + rule + suffix + after;
+      const newPos = before.length + rule.length;
+      ta.selectionStart = ta.selectionEnd = newPos;
       ta.focus();
-      return;
-    }
-    case 'end': {
-      let endLineEnd = val.indexOf('\n', start);
-      if (endLineEnd === -1) endLineEnd = val.length;
-      ta.selectionStart = ta.selectionEnd = endLineEnd;
-      ta.focus();
+      ta.dispatchEvent(new Event('input'));
       return;
     }
   }
@@ -1268,12 +1497,21 @@ window.addEventListener('popstate', (e) => {
       editorTitle.value = note.title || '';
       editorTextarea.value = note.body;
       updatePinButtonState(note.pinned === true);
+      updateStatusButton(note.status);
       updateColorIndicator(getValidColor(note.color));
       editView.classList.add('view-editor--active');
       listView.classList.add('view-list--behind');
     }
   } else if (e.state && e.state.view === 'settings') {
     settingsView.classList.add('view-editor--active');
+    listView.classList.add('view-list--behind');
+  } else if (e.state && e.state.view === 'archive') {
+    // Coming back from an archived note opened in the editor
+    if (editView.classList.contains('view-editor--active')) {
+      closeEditor();
+    }
+    renderArchive();
+    archiveView.classList.add('view-editor--active');
     listView.classList.add('view-list--behind');
   } else {
     // Back to list
@@ -1282,6 +1520,9 @@ window.addEventListener('popstate', (e) => {
     }
     if (settingsView.classList.contains('view-editor--active')) {
       closeSettings();
+    }
+    if (archiveView.classList.contains('view-editor--active')) {
+      closeArchive();
     }
   }
 });
@@ -1313,7 +1554,8 @@ fab.addEventListener('click', () => {
     id: generateId(),
     title: '',
     body: '',
-    archived: false,
+    status: currentTab === 'keep' ? 'keep' : 'inbox',
+    archivedFrom: null,
     pinned: false,
     color: null,
     createdAt: now,
@@ -1364,7 +1606,8 @@ function importData(file) {
   reader.onload = (e) => {
     try {
       const parsed = JSON.parse(e.target.result);
-      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.notes)) {
+      const validVersion = parsed && parsed.version >= 1 && parsed.version <= DATA_VERSION;
+      if (!parsed || !validVersion || !Array.isArray(parsed.notes)) {
         showToast('Invalid file format', 'danger', 3000);
         return;
       }
@@ -1379,8 +1622,10 @@ function importData(file) {
       let addedCount = 0;
       let updatedCount = 0;
 
-      for (const note of parsed.notes) {
-        if (!note.id || typeof note.archived !== 'boolean') continue;
+      for (const raw of parsed.notes) {
+        // Accept both v1 (archived boolean) and v2 (status) notes
+        const note = normalizeNote(raw);
+        if (!note) continue;
         const existing = existingIds.get(note.id);
         if (existing) {
           if (new Date(note.updatedAt) > new Date(existing.updatedAt)) {
@@ -1394,7 +1639,7 @@ function importData(file) {
       }
 
       saveData();
-      renderList();
+      renderAll();
       showToast('Imported: ' + addedCount + ' added, ' + updatedCount + ' updated', 'success', 3000);
     } catch (err) {
       showToast('Failed to parse JSON file', 'danger', 3000);
@@ -1673,7 +1918,8 @@ async function processVoiceResult() {
     id: generateId(),
     title: title,
     body: body,
-    archived: false,
+    status: 'inbox',
+    archivedFrom: null,
     pinned: false,
     color: null,
     createdAt: now,

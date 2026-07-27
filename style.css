@@ -119,6 +119,11 @@ button {
   transform: translateX(0);
 }
 
+/* Archive sits below the editor: an archived note can be opened from it */
+#archive-view {
+  z-index: 19;
+}
+
 .view-list--behind {
   transform: translateX(-30%);
   opacity: 0.5;
@@ -200,10 +205,33 @@ button {
   border-bottom-color: var(--accent);
 }
 
-.tab__badge {
+/* === Editor status toggle (Inbox / Keep) === */
+.header__status {
+  height: 1.75rem;
+  padding: 0 var(--space-2);
+  margin-right: var(--space-1);
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
   font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  margin-left: var(--space-1);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.header__status--keep {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.header__status:disabled {
+  opacity: 0.5;
+}
+
+.header__status:active:not(:disabled) {
+  background: var(--bg-hover);
 }
 
 /* === Memo list === */
@@ -229,14 +257,30 @@ button {
   transition: opacity 100ms ease;
 }
 
+/* Left-edge background is revealed by a right swipe, and vice versa */
+.swipe-background--left {
+  justify-content: flex-start;
+}
+
+.swipe-background--right {
+  justify-content: flex-end;
+}
+
 .swipe-background--archive {
   background: var(--color-archive);
-  justify-content: flex-end;
 }
 
 .swipe-background--delete {
   background: var(--color-delete);
-  justify-content: flex-end;
+}
+
+.swipe-background--keep,
+.swipe-background--restore {
+  background: var(--color-success);
+}
+
+.swipe-background--demote {
+  background: var(--bg-hover);
 }
 
 .swipe-background__icon {
@@ -763,9 +807,7 @@ button {
   border-right: none;
 }
 
-.markdown-key[data-insert="tab"],
-.markdown-key[data-insert="home"],
-.markdown-key[data-insert="end"] {
+.markdown-key[data-insert="tab"] {
   font-family: var(--font-ui);
   font-size: var(--text-xs);
   text-transform: none;

@@ -27,6 +27,7 @@
           </svg>
         </button>
         <div id="dropdown-menu" class="dropdown-menu" hidden>
+          <button id="archive-menu-btn" class="dropdown-menu__item">Archive</button>
           <button id="export-btn" class="dropdown-menu__item">Export JSON</button>
           <button id="import-btn" class="dropdown-menu__item">Import JSON</button>
           <button id="settings-menu-btn" class="dropdown-menu__item">Settings</button>
@@ -35,8 +36,8 @@
       </div>
     </header>
     <div class="tabs">
-      <button class="tab tab--active" data-tab="active">Active</button>
-      <button class="tab" data-tab="archived">Archive<span id="archive-badge" class="tab__badge" hidden></span></button>
+      <button class="tab tab--active" data-tab="inbox">Inbox</button>
+      <button class="tab" data-tab="keep">Keep</button>
     </div>
     <div id="memo-list" class="memo-list"></div>
     <div id="empty-state" class="empty-state">
@@ -102,6 +103,7 @@
           <polyline points="3,8 7,12 13,4"/>
         </svg>
       </div>
+      <button id="status-btn" class="header__status" aria-label="Toggle Inbox / Keep">Inbox</button>
       <button id="pin-btn" class="header__action header__pin" aria-label="Pin">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2l0 5"/>
@@ -141,9 +143,24 @@
       <button class="markdown-key" data-insert="quote">&gt;</button>
       <button class="markdown-key" data-insert="code">`</button>
       <button class="markdown-key" data-insert="bold">*</button>
+      <button class="markdown-key" data-insert="hr" aria-label="Horizontal rule">―</button>
       <button class="markdown-key" data-insert="tab">Tab</button>
-      <button class="markdown-key" data-insert="home">Home</button>
-      <button class="markdown-key" data-insert="end">End</button>
+    </div>
+  </div>
+
+  <!-- Archive View -->
+  <div id="archive-view" class="view view-editor">
+    <header class="header">
+      <button id="archive-back-btn" class="header__action" aria-label="Back">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="12,4 6,10 12,16"/>
+        </svg>
+      </button>
+      <h1 class="header__title">Archive</h1>
+    </header>
+    <div id="archive-list" class="memo-list"></div>
+    <div id="archive-empty-state" class="empty-state">
+      <p class="empty-state__text">No archived memos.</p>
     </div>
   </div>
 

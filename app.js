@@ -17,6 +17,8 @@ const VALID_STATUSES = ['inbox', 'keep', 'archived'];
 let data = { version: DATA_VERSION, notes: [] };
 let settings = { geminiApiKey: '' };
 let currentTab = 'inbox';    // 'inbox' | 'keep'
+let searchActive = false;
+let searchQuery = '';
 let currentNoteId = null;
 let saveTimerId = null;
 let toastTimerId = null;
@@ -104,6 +106,12 @@ const archiveListEl = document.getElementById('archive-list');
 const archiveEmptyStateEl = document.getElementById('archive-empty-state');
 const archiveBackBtn = document.getElementById('archive-back-btn');
 const archiveMenuBtn = document.getElementById('archive-menu-btn');
+const copyMenu      = document.getElementById('copy-menu');
+const tabsEl        = document.getElementById('tabs');
+const searchBtn     = document.getElementById('search-btn');
+const searchBar     = document.getElementById('search-bar');
+const searchInput   = document.getElementById('search-input');
+const searchCloseBtn = document.getElementById('search-close-btn');
 
 // ============================================================
 // Storage
@@ -576,10 +584,11 @@ function renderNotes(container, status) {
       copySvg.appendChild(path);
       copyBtn.appendChild(copySvg);
 
-      copyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        copyText(note.body, copyBtn);
-      });
+      setupCopyButton(copyBtn, () => ({
+        title: note.title,
+        body: note.body,
+        cursor: null, // no cursor in the list, so "this block" is unavailable
+      }));
 
       item.appendChild(copyBtn);
     }
@@ -599,6 +608,11 @@ function renderNotes(container, status) {
 }
 
 function renderList() {
+  if (searchActive && searchQuery) {
+    renderSearchResults();
+    updateArchiveMenuLabel();
+    return;
+  }
   renderNotes(memoListEl, currentTab);
   updateEmptyState();
   updateArchiveMenuLabel();
@@ -615,6 +629,175 @@ function renderAll() {
   renderList();
   renderArchive();
 }
+
+// ============================================================
+// Search
+// ============================================================
+
+const BUCKET_LABELS = { inbox: 'Inbox', keep: 'Keep', archived: 'Archive' };
+
+function searchNotes(query) {
+  const q = query.toLowerCase();
+  return data.notes
+    .filter((n) => (n.title + '\n' + n.body).toLowerCase().includes(q))
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+}
+
+// Build a text node sequence with every occurrence of `query` wrapped in a
+// span. Avoids innerHTML so note content is never parsed as markup.
+function buildHighlighted(text, query) {
+  const frag = document.createDocumentFragment();
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  let from = 0;
+
+  while (q) {
+    const idx = lower.indexOf(q, from);
+    if (idx === -1) break;
+    if (idx > from) frag.appendChild(document.createTextNode(text.slice(from, idx)));
+    const mark = document.createElement('span');
+    mark.className = 'search-highlight';
+    mark.textContent = text.slice(idx, idx + q.length);
+    frag.appendChild(mark);
+    from = idx + q.length;
+  }
+
+  frag.appendChild(document.createTextNode(text.slice(from)));
+  return frag;
+}
+
+// The first body line containing the query, else the first non-empty line
+function getMatchLine(note, query) {
+  const q = query.toLowerCase();
+  const lines = note.body.split('\n');
+  const hit = lines.find((l) => l.toLowerCase().includes(q));
+  if (hit !== undefined) return hit.trim();
+  return (lines.find((l) => l.trim()) || '').trim();
+}
+
+function renderSearchResults() {
+  memoListEl.textContent = '';
+  const notes = searchNotes(searchQuery);
+
+  if (notes.length === 0) {
+    emptyStateEl.classList.add('empty-state--visible');
+    emptyText.textContent = 'No matches.';
+    archiveEmptyStateEl.classList.remove('empty-state--visible');
+    return;
+  }
+  emptyStateEl.classList.remove('empty-state--visible');
+
+  notes.forEach((note) => {
+    const item = document.createElement('div');
+    item.className = 'memo-item memo-item--result';
+    item.dataset.id = note.id;
+
+    const noteColor = getValidColor(note.color);
+    if (noteColor) item.classList.add('memo-item--color-' + noteColor);
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'memo-item__title-row';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'memo-item__title';
+    const displayTitle = getDisplayTitle(note);
+    if (displayTitle === 'Untitled') titleEl.classList.add('memo-item__title--empty');
+    titleEl.appendChild(buildHighlighted(displayTitle, searchQuery));
+    titleRow.appendChild(titleEl);
+    item.appendChild(titleRow);
+
+    const matchLine = getMatchLine(note, searchQuery);
+    if (matchLine) {
+      const previewEl = document.createElement('div');
+      previewEl.className = 'memo-item__preview';
+      previewEl.appendChild(buildHighlighted(matchLine, searchQuery));
+      item.appendChild(previewEl);
+    }
+
+    const metaRow = document.createElement('div');
+    metaRow.className = 'memo-item__meta';
+    const dateEl = document.createElement('div');
+    dateEl.className = 'memo-item__date';
+    dateEl.textContent = formatDate(note.updatedAt);
+    metaRow.appendChild(dateEl);
+    const bucket = document.createElement('span');
+    bucket.className = 'memo-item__bucket memo-item__bucket--' + note.status;
+    bucket.textContent = BUCKET_LABELS[note.status];
+    metaRow.appendChild(bucket);
+    item.appendChild(metaRow);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'memo-item__copy';
+    copyBtn.setAttribute('aria-label', 'Copy');
+    const copySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    copySvg.setAttribute('width', '18');
+    copySvg.setAttribute('height', '18');
+    copySvg.setAttribute('viewBox', '0 0 20 20');
+    copySvg.setAttribute('fill', 'none');
+    copySvg.setAttribute('stroke', 'currentColor');
+    copySvg.setAttribute('stroke-width', '1.5');
+    copySvg.setAttribute('stroke-linecap', 'round');
+    copySvg.setAttribute('stroke-linejoin', 'round');
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', '6');
+    rect.setAttribute('y', '6');
+    rect.setAttribute('width', '10');
+    rect.setAttribute('height', '11');
+    rect.setAttribute('rx', '1.5');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M4 14V4.5A1.5 1.5 0 015.5 3H13');
+    copySvg.appendChild(rect);
+    copySvg.appendChild(path);
+    copyBtn.appendChild(copySvg);
+    setupCopyButton(copyBtn, () => ({ title: note.title, body: note.body, cursor: null }));
+    item.appendChild(copyBtn);
+
+    // No swipe here: results mix buckets, so a swipe action would be ambiguous
+    item.addEventListener('click', () => openEditor(note.id));
+
+    memoListEl.appendChild(item);
+  });
+}
+
+function openSearch() {
+  searchActive = true;
+  tabsEl.hidden = true;
+  searchBar.hidden = false;
+  fab.hidden = true;
+  voiceFab.hidden = true;
+  searchInput.value = searchQuery;
+  history.pushState({ view: 'search' }, '');
+  setTimeout(() => searchInput.focus(), 50);
+  renderList();
+}
+
+function closeSearch() {
+  searchActive = false;
+  searchQuery = '';
+  searchInput.value = '';
+  searchBar.hidden = true;
+  tabsEl.hidden = false;
+  fab.hidden = false;
+  voiceFab.hidden = false;
+  renderList();
+}
+
+searchBtn.addEventListener('click', () => {
+  if (searchActive) return;
+  openSearch();
+});
+
+searchInput.addEventListener('input', () => {
+  searchQuery = searchInput.value.trim();
+  renderList();
+});
+
+searchCloseBtn.addEventListener('click', () => {
+  if (history.state && history.state.view === 'search') {
+    history.back();
+  } else {
+    closeSearch();
+  }
+});
 
 // ============================================================
 // Archive menu label
@@ -935,6 +1118,125 @@ toastAction.addEventListener('click', () => {
 // ============================================================
 // Copy
 // ============================================================
+
+const COPY_LONG_PRESS_MS = 500;
+let copyMenuContext = null;
+
+// Title is kept as a heading so the note keeps its context when pasted
+function composeFullText(title, body) {
+  if (!title) return body;
+  return '# ' + title + '\n\n' + body;
+}
+
+function isRuleLine(line) {
+  return /^\s*---+\s*$/.test(line);
+}
+
+// The "---"-delimited section the cursor sits in. A cursor on a rule line
+// belongs to the section that follows it.
+function getBlockAtCursor(text, pos) {
+  const lines = text.split('\n');
+  const last = lines.length - 1;
+  let idx = text.slice(0, pos).split('\n').length - 1;
+
+  if (isRuleLine(lines[idx])) idx = Math.min(idx + 1, last);
+
+  let start = idx;
+  let end = idx;
+  while (start > 0 && !isRuleLine(lines[start - 1])) start--;
+  while (end < last && !isRuleLine(lines[end + 1])) end++;
+
+  return lines.slice(start, end + 1).join('\n').trim();
+}
+
+// Drop Markdown markup for pasting into places that do not render it
+function stripMarkdown(text) {
+  return text.split('\n').map((line) => {
+    if (isRuleLine(line)) return '';
+    let out = line;
+    out = out.replace(/^(\s*)#{1,6}\s+/, '$1');
+    out = out.replace(/^(\s*)>\s?/, '$1');
+    out = out.replace(/^(\s*)[-*] \[ \] /, '$1☐ ');
+    out = out.replace(/^(\s*)[-*] \[[xX]\] /, '$1☑ ');
+    out = out.replace(/\*\*([^*]+)\*\*/g, '$1');
+    out = out.replace(/\*([^*]+)\*/g, '$1');
+    out = out.replace(/`([^`]+)`/g, '$1');
+    return out;
+  }).join('\n');
+}
+
+function buildCopyText(ctx, mode) {
+  switch (mode) {
+    case 'body':  return ctx.body;
+    case 'block': return ctx.cursor === null ? ctx.body : getBlockAtCursor(ctx.body, ctx.cursor);
+    case 'plain': return stripMarkdown(composeFullText(ctx.title, ctx.body));
+    default:      return composeFullText(ctx.title, ctx.body);
+  }
+}
+
+// Tap copies the full note; long-press (or right-click) picks a format
+function setupCopyButton(btn, getContext) {
+  let timerId = null;
+  let longPressed = false;
+
+  const cancel = () => clearTimeout(timerId);
+
+  btn.addEventListener('touchstart', () => {
+    longPressed = false;
+    cancel();
+    timerId = setTimeout(() => {
+      longPressed = true;
+      if (navigator.vibrate) navigator.vibrate(10);
+      openCopyMenu(btn, getContext());
+    }, COPY_LONG_PRESS_MS);
+  }, { passive: true });
+  btn.addEventListener('touchmove', cancel, { passive: true });
+  btn.addEventListener('touchend', cancel, { passive: true });
+  btn.addEventListener('touchcancel', cancel, { passive: true });
+
+  btn.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    longPressed = true;
+    openCopyMenu(btn, getContext());
+  });
+
+  // Propagation is stopped so a copy in the list does not open the editor,
+  // which also means the document-level handler cannot close these for us
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdownMenu.hidden = true;
+    colorPicker.classList.remove('color-picker--open');
+    if (longPressed) {
+      longPressed = false;
+      return;
+    }
+    copyText(buildCopyText(getContext(), 'full'), btn);
+  });
+}
+
+function openCopyMenu(anchorEl, ctx) {
+  copyMenuContext = ctx;
+  copyMenu.querySelector('[data-copy="block"]').hidden = ctx.cursor === null;
+
+  const rect = anchorEl.getBoundingClientRect();
+  copyMenu.style.top = (rect.bottom + 4) + 'px';
+  copyMenu.style.right = Math.max(4, window.innerWidth - rect.right) + 'px';
+  copyMenu.hidden = false;
+}
+
+function closeCopyMenu() {
+  copyMenu.hidden = true;
+  copyMenuContext = null;
+}
+
+copyMenu.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const item = e.target.closest('.copy-menu__item');
+  if (!item || !copyMenuContext) return;
+  copyText(buildCopyText(copyMenuContext, item.dataset.copy), null);
+  closeCopyMenu();
+});
 
 async function copyText(text, buttonEl) {
   try {
@@ -1306,6 +1608,7 @@ settingsMenuBtn.addEventListener('click', (e) => {
 // Close dropdown on outside click
 document.addEventListener('click', () => {
   dropdownMenu.hidden = true;
+  closeCopyMenu();
 });
 
 // ============================================================
@@ -1320,93 +1623,108 @@ document.querySelectorAll('.markdown-key').forEach((key) => {
   });
 });
 
+// Replace [start, end) with text, keeping the browser's native undo history.
+// execCommand is deprecated but is the only way to push an edit onto the
+// textarea's undo stack; fall back to a direct assignment when it fails.
+function replaceRange(ta, start, end, text, selStart, selEnd) {
+  ta.focus();
+  ta.setSelectionRange(start, end);
+
+  let ok = false;
+  try {
+    ok = document.execCommand('insertText', false, text);
+  } catch (e) {
+    ok = false;
+  }
+
+  if (!ok) {
+    // Fallback: undo history is lost, but the edit still lands
+    ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+    ta.dispatchEvent(new Event('input'));
+  }
+
+  if (selStart !== undefined) {
+    ta.setSelectionRange(selStart, selEnd === undefined ? selStart : selEnd);
+  }
+}
+
 function handleMarkdownInsert(action) {
   const ta = editorTextarea;
   const start = ta.selectionStart;
   const end = ta.selectionEnd;
   const val = ta.value;
   const selectedText = val.substring(start, end);
-
-  let insertText = '';
-  let cursorOffset = 0;
+  const lineStart = val.lastIndexOf('\n', start - 1) + 1;
 
   switch (action) {
     case 'heading': {
       // Insert at line beginning; consecutive presses add more #
-      const lineStart = val.lastIndexOf('\n', start - 1) + 1;
       const lineText = val.substring(lineStart, start);
       const match = lineText.match(/^(#{1,5})\s?/);
       if (match) {
-        // Add another #
         const newHashes = match[1] + '#';
-        const replaceEnd = lineStart + match[0].length;
-        ta.value = val.substring(0, lineStart) + newHashes + ' ' + val.substring(replaceEnd);
-        const newPos = lineStart + newHashes.length + 1;
-        ta.selectionStart = ta.selectionEnd = newPos;
+        replaceRange(ta, lineStart, lineStart + match[0].length, newHashes + ' ',
+          start + 1);
       } else {
-        // Insert # at line start
-        ta.value = val.substring(0, lineStart) + '# ' + val.substring(lineStart);
-        ta.selectionStart = ta.selectionEnd = start + 2;
+        replaceRange(ta, lineStart, lineStart, '# ', start + 2);
       }
-      ta.focus();
-      ta.dispatchEvent(new Event('input'));
       return;
     }
-    case 'list':
-      insertText = '- ';
-      cursorOffset = 2;
-      break;
+    case 'list': {
+      // Cycle the line marker: none -> "- " -> "- [ ] " -> none
+      const lineText = val.substring(lineStart, start);
+      const indentMatch = lineText.match(/^(\s*)/);
+      const indent = indentMatch[1];
+      const afterIndent = lineStart + indent.length;
+      const rest = val.substring(afterIndent, start);
+
+      const checkboxMatch = rest.match(/^[-*] \[[ xX]\] /);
+      if (checkboxMatch) {
+        // Remove the marker entirely
+        replaceRange(ta, afterIndent, afterIndent + checkboxMatch[0].length, '',
+          start - checkboxMatch[0].length);
+        return;
+      }
+
+      const bulletMatch = rest.match(/^[-*] /);
+      if (bulletMatch) {
+        // Promote to a checkbox
+        replaceRange(ta, afterIndent, afterIndent + bulletMatch[0].length, '- [ ] ',
+          start + ('- [ ] '.length - bulletMatch[0].length));
+        return;
+      }
+
+      replaceRange(ta, afterIndent, afterIndent, '- ', start + 2);
+      return;
+    }
     case 'quote':
-      insertText = '> ';
-      cursorOffset = 2;
-      break;
+      replaceRange(ta, start, end, '> ', start + 2);
+      return;
     case 'code':
       if (selectedText) {
-        ta.value = val.substring(0, start) + '`' + selectedText + '`' + val.substring(end);
-        ta.selectionStart = start + 1;
-        ta.selectionEnd = start + 1 + selectedText.length;
+        replaceRange(ta, start, end, '`' + selectedText + '`',
+          start + 1, start + 1 + selectedText.length);
       } else {
-        insertText = '``';
-        cursorOffset = 1; // Place cursor between backticks
+        replaceRange(ta, start, end, '``', start + 1);
       }
-      ta.focus();
-      if (selectedText) {
-        ta.dispatchEvent(new Event('input'));
-        return;
-      }
-      break;
+      return;
     case 'bold':
       if (selectedText) {
-        ta.value = val.substring(0, start) + '**' + selectedText + '**' + val.substring(end);
-        ta.selectionStart = start + 2;
-        ta.selectionEnd = start + 2 + selectedText.length;
+        replaceRange(ta, start, end, '**' + selectedText + '**',
+          start + 2, start + 2 + selectedText.length);
       } else {
-        insertText = '****';
-        cursorOffset = 2; // Place cursor between **
+        replaceRange(ta, start, end, '****', start + 2);
       }
-      ta.focus();
-      if (selectedText) {
-        ta.dispatchEvent(new Event('input'));
-        return;
-      }
-      break;
+      return;
     case 'tab': {
-      // If cursor is on a list line, indent the whole line
-      const tabLineStart = val.lastIndexOf('\n', start - 1) + 1;
-      const tabLineText = val.substring(tabLineStart, end);
-      const tabListMatch = tabLineText.match(/^(\s*)([-*] )/);
-      if (tabListMatch) {
-        // Indent the list item by 2 spaces
-        ta.value = val.substring(0, tabLineStart) + '  ' + val.substring(tabLineStart);
-        ta.selectionStart = start + 2;
-        ta.selectionEnd = end + 2;
-        ta.focus();
-        ta.dispatchEvent(new Event('input'));
-        return;
+      // If the cursor is on a list line, indent the whole line
+      const tabLineText = val.substring(lineStart, end);
+      if (/^(\s*)([-*] )/.test(tabLineText)) {
+        replaceRange(ta, lineStart, lineStart, '  ', start + 2, end + 2);
+      } else {
+        replaceRange(ta, start, end, '  ', start + 2);
       }
-      insertText = '  ';
-      cursorOffset = 2;
-      break;
+      return;
     }
     case 'hr': {
       const before = val.substring(0, start);
@@ -1427,20 +1745,9 @@ function handleMarkdownInsert(action) {
       // Keep following content on its own line
       const suffix = (after.length > 0 && !after.startsWith('\n')) ? '\n' : '';
 
-      ta.value = before + rule + suffix + after;
-      const newPos = before.length + rule.length;
-      ta.selectionStart = ta.selectionEnd = newPos;
-      ta.focus();
-      ta.dispatchEvent(new Event('input'));
+      replaceRange(ta, start, end, rule + suffix, start + rule.length);
       return;
     }
-  }
-
-  if (insertText) {
-    ta.value = val.substring(0, start) + insertText + val.substring(end);
-    ta.selectionStart = ta.selectionEnd = start + cursorOffset;
-    ta.focus();
-    ta.dispatchEvent(new Event('input'));
   }
 }
 
@@ -1460,29 +1767,52 @@ editorTextarea.addEventListener('keydown', (e) => {
   const lineStart = val.lastIndexOf('\n', start - 1) + 1;
   const lineText = val.substring(lineStart, start);
 
-  // Match list prefix: optional leading spaces + "- " or "* "
-  const listMatch = lineText.match(/^(\s*[-*] )/);
-  if (!listMatch) return;
-
-  const prefix = listMatch[1];
-  const lineContent = lineText.substring(prefix.length);
+  const continuation = getListContinuation(lineText);
+  if (!continuation) return;
 
   e.preventDefault();
 
-  if (lineContent.length === 0) {
-    // Empty list item — remove the prefix and end the list
-    ta.value = val.substring(0, lineStart) + '\n' + val.substring(start);
-    ta.selectionStart = ta.selectionEnd = lineStart + 1;
+  if (continuation.content.length === 0) {
+    // Empty list item — remove the marker and end the list
+    replaceRange(ta, lineStart, start, '\n', lineStart + 1);
   } else {
-    // Continue the list
-    const insertStr = '\n' + prefix;
-    ta.value = val.substring(0, start) + insertStr + val.substring(start);
-    ta.selectionStart = ta.selectionEnd = start + insertStr.length;
+    replaceRange(ta, start, start, '\n' + continuation.next,
+      start + 1 + continuation.next.length);
+  }
+});
+
+// Work out what the next line's marker should be, or null if the line is
+// not a list item. `content` is what follows the marker on the current line.
+function getListContinuation(lineText) {
+  // Checkbox: "- [ ] " / "- [x] " (a checked item continues unchecked)
+  const checkbox = lineText.match(/^(\s*)([-*] )\[[ xX]\] /);
+  if (checkbox) {
+    return {
+      next: checkbox[1] + checkbox[2] + '[ ] ',
+      content: lineText.substring(checkbox[0].length),
+    };
   }
 
-  ta.focus();
-  ta.dispatchEvent(new Event('input'));
-});
+  // Ordered: "1. " / "1) " — increment, without renumbering later lines
+  const ordered = lineText.match(/^(\s*)(\d+)([.)] )/);
+  if (ordered) {
+    return {
+      next: ordered[1] + (parseInt(ordered[2], 10) + 1) + ordered[3],
+      content: lineText.substring(ordered[0].length),
+    };
+  }
+
+  // Bullet: "- " / "* "
+  const bullet = lineText.match(/^(\s*[-*] )/);
+  if (bullet) {
+    return {
+      next: bullet[1],
+      content: lineText.substring(bullet[0].length),
+    };
+  }
+
+  return null;
+}
 
 // ============================================================
 // Navigation (History API)
@@ -1513,6 +1843,18 @@ window.addEventListener('popstate', (e) => {
     renderArchive();
     archiveView.classList.add('view-editor--active');
     listView.classList.add('view-list--behind');
+  } else if (e.state && e.state.view === 'search') {
+    // Coming back from anything opened on top of the results; keep the query
+    if (editView.classList.contains('view-editor--active')) {
+      closeEditor();
+    }
+    if (settingsView.classList.contains('view-editor--active')) {
+      closeSettings();
+    }
+    if (archiveView.classList.contains('view-editor--active')) {
+      closeArchive();
+    }
+    renderList();
   } else {
     // Back to list
     if (editView.classList.contains('view-editor--active')) {
@@ -1523,6 +1865,9 @@ window.addEventListener('popstate', (e) => {
     }
     if (archiveView.classList.contains('view-editor--active')) {
       closeArchive();
+    }
+    if (searchActive) {
+      closeSearch();
     }
   }
 });
@@ -1576,9 +1921,11 @@ backBtn.addEventListener('click', () => {
 });
 
 // Copy from editor
-copyBtnEditor.addEventListener('click', () => {
-  copyText(editorTextarea.value, null);
-});
+setupCopyButton(copyBtnEditor, () => ({
+  title: editorTitle.value,
+  body: editorTextarea.value,
+  cursor: editorTextarea.selectionStart,
+}));
 
 // Export
 function exportData() {

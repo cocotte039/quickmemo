@@ -13,8 +13,10 @@ A lightweight, offline-first memo PWA. No server, no account — your notes stay
 - **Swipe actions** — Swipe left to archive, right to move between Inbox and Keep; in Archive, left deletes and right restores
 - **Bulk delete** — Delete all archived memos at once with a single tap
 - **Undo** — Toast with undo button on every move, archive, restore, and delete (including bulk delete)
-- **Markdown toolbar** — Quick-insert `#`, `-`, `>`, `` ` ``, `**`, `---`
-- **Copy** — One-tap copy from list or editor
+- **Search** — Incremental search across Inbox, Keep, and Archive with match highlighting
+- **Markdown toolbar** — Quick-insert `#`, `-`, `- [ ]`, `>`, `` ` ``, `**`, `---`
+- **List continuation** — Enter continues bullets, checkboxes, and numbered lists
+- **Copy** — Tap to copy the full note; long-press to pick a format
 - **JSON export / import** — Backup and restore notes as JSON files
 - **Installable** — Add to home screen for a standalone app experience
 - **Dark theme** — GitHub-dark inspired palette with monospace editor
@@ -33,6 +35,27 @@ Every memo lives in exactly one of three buckets.
 - Restoring an archived memo sends it back to the bucket it came from
 - The editor header shows a pill with the current bucket; tap it to switch between Inbox and Keep
 - Every one of these moves shows an undo toast
+
+## Copying
+
+Tapping a copy button copies the whole note — the title becomes a `#` heading so the note keeps its context when pasted. Long-press (or right-click) the same button to choose a different format.
+
+| Format | Output |
+|---|---|
+| **Full note** | `# {title}` + blank line + body (default) |
+| **Body only** | The body as-is |
+| **This block** | Only the `---`-delimited section the cursor is in (editor only) |
+| **Without markup** | Markdown stripped: headings, `>`, `**bold**`, `` `code` `` removed; checkboxes become ☐/☑; bullets kept |
+
+## Search
+
+Tap the magnifier in the header. Typing filters Inbox, Keep, and Archive together, newest first, with the matching text highlighted and a badge showing which bucket each result is in. Results open on tap; swipe actions are disabled there because the list mixes buckets.
+
+## Writing lists
+
+- The `-` key cycles the current line: nothing → `- ` → `- [ ] ` → nothing
+- Enter continues the list: bullets repeat, checkboxes continue unchecked, and `1.` increments to `2.`
+- Enter on an empty item ends the list
 
 ## Voice Memo
 

@@ -1,9 +1,10 @@
-const CACHE_NAME = 'quickmemo-v9';
+const CACHE_NAME = 'quickmemo-v10';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './app.js',
+  './pcm-worklet.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

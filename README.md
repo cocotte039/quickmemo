@@ -9,7 +9,7 @@ A lightweight, offline-first memo PWA. No server, no account — your notes stay
 - **Three buckets** — **Inbox** for quick throwaway notes, **Keep** for what you want to come back to, **Archive** for what should be out of sight
 - **Offline-first** — Works without internet via Service Worker
 - **Auto-save** — Saves as you type (500ms debounce)
-- **Voice memo** — Tap the mic FAB → speak → auto-summarize with Gemini → save as Markdown note
+- **Voice memo** — Tap the mic FAB → speak → Gemini transcribes and summarizes → save as Markdown note
 - **Swipe actions** — Swipe left to archive, right to move between Inbox and Keep; in Archive, left deletes and right restores
 - **Bulk delete** — Delete all archived memos at once with a single tap
 - **Undo** — Toast with undo button on every move, archive, restore, and delete (including bulk delete)
@@ -59,21 +59,25 @@ Tap the magnifier in the header. Typing filters Inbox, Keep, and Archive togethe
 
 ## Voice Memo
 
-Record your thoughts and let AI summarize them into structured notes.
+Record your thoughts and let AI turn them into structured notes.
 
 1. Open **Settings** (menu → Settings) and enter your [Gemini API key](https://ai.google.dev/)
 2. Tap the green mic button on the list screen
-3. Speak — real-time transcription is shown on the overlay
-4. Tap stop — Gemini summarizes the text into a heading + bullet points
+3. Speak — the overlay shows elapsed time and an input level meter
+4. Tap stop — the recording is sent to Gemini, which transcribes it and summarizes it into a heading + bullet points
 5. The result is saved as a new memo and opened in the editor
 
-If summarization fails, the raw transcript is saved as a fallback so you never lose your words.
+The mic button in the editor appends to the memo you have open. That mode transcribes only — no summarizing, no heading.
 
-> Voice input uses the browser's Web Speech API (`ja-JP`). Gemini 3 Flash (free tier) is used for summarization. The summary is written in the same language as the spoken input. Your API key is stored locally in `localStorage` and is never sent anywhere except to Google's Gemini API.
+If transcription fails (rate limit, flaky connection), the recording is kept and the error toast offers **Retry**, so a long memo is not lost.
+
+Recording stops automatically at **7 minutes**, which is the most that fits in a single API request.
+
+> Audio is captured as 16 kHz mono WAV and transcribed by Gemini 3.5 Flash (free tier) — the same request also does the summarizing. Transcribing from the recording rather than streaming it means the accuracy of the model, not the browser, sets the quality. Output is written in the same language as the spoken input. Your API key is stored locally in `localStorage` and is never sent anywhere except to Google's Gemini API.
 
 ## Privacy
 
-All data is stored in your browser's `localStorage`. **Nothing is sent to any server** except voice memo summarization requests, which are sent directly to the Gemini API using your own API key.
+All data is stored in your browser's `localStorage`. **Nothing is sent to any server** except voice recordings, which are sent directly to the Gemini API using your own API key to be transcribed. Recordings are held in memory only for the duration of that request and are never written to disk.
 
 ## Setup
 
@@ -96,8 +100,8 @@ All data is stored in your browser's `localStorage`. **Nothing is sent to any se
 
 - HTML / CSS / Vanilla JS (no frameworks, no build step)
 - `localStorage` for persistence
-- Web Speech API for voice recognition
-- Gemini 3 Flash API for summarization
+- Web Audio API (`AudioWorklet`) for recording, encoded to 16 kHz mono WAV in the browser
+- Gemini 3.5 Flash API for transcription and summarization
 - Service Worker (cache-first strategy, Gemini API excluded)
 - GitHub Pages for hosting
 

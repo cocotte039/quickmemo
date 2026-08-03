@@ -88,9 +88,13 @@
       </div>
       <div id="voice-processing" class="voice-overlay__processing" hidden>
         <div class="voice-overlay__spinner"></div>
-        <span class="voice-overlay__label">Summarizing...</span>
+        <span class="voice-overlay__label">Transcribing...</span>
       </div>
-      <div id="voice-transcript" class="voice-overlay__transcript"></div>
+      <div id="voice-timer" class="voice-overlay__timer">0:00</div>
+      <div class="voice-overlay__meter">
+        <div id="voice-meter-fill" class="voice-overlay__meter-fill"></div>
+      </div>
+      <p id="voice-hint" class="voice-overlay__hint" hidden></p>
     </div>
     <div id="voice-controls" class="voice-overlay__controls">
       <button id="voice-cancel-btn" class="voice-overlay__cancel">キャンセル</button>

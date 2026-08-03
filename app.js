@@ -26,28 +26,30 @@ let undoAction = null;
 let unsavedChanges = false;
 const voiceState = {
   recording: false,
-  finalSegments: [],
-  engine: null,
+  recorder: null,
   cancelled: false,
   appendMode: false,
   appendTargetId: null,
   appendCursorPos: null,
   abortController: null,
+  startedAt: 0,
+  tickerId: null,
+  autoStopId: null,
 };
 
 function resetVoiceState() {
   voiceState.recording = false;
-  voiceState.finalSegments = [];
-  voiceState.engine = null;
+  voiceState.recorder = null;
   voiceState.cancelled = false;
   voiceState.appendMode = false;
   voiceState.appendTargetId = null;
   voiceState.appendCursorPos = null;
   voiceState.abortController = null;
-}
-
-function getFinalizedText() {
-  return voiceState.finalSegments.join('');
+  voiceState.startedAt = 0;
+  if (voiceState.tickerId) clearInterval(voiceState.tickerId);
+  if (voiceState.autoStopId) clearTimeout(voiceState.autoStopId);
+  voiceState.tickerId = null;
+  voiceState.autoStopId = null;
 }
 
 // --- ID generation ---
@@ -71,7 +73,9 @@ const voiceFab       = document.getElementById('voice-fab');
 const voiceOverlay   = document.getElementById('voice-overlay');
 const voiceStatus    = document.getElementById('voice-status');
 const voiceProcessing = document.getElementById('voice-processing');
-const voiceTranscript = document.getElementById('voice-transcript');
+const voiceTimer     = document.getElementById('voice-timer');
+const voiceMeterFill = document.getElementById('voice-meter-fill');
+const voiceHint      = document.getElementById('voice-hint');
 const voiceStopBtn   = document.getElementById('voice-stop-btn');
 const voiceCancelBtn = document.getElementById('voice-cancel-btn');
 const voiceControls  = document.getElementById('voice-controls');
@@ -215,98 +219,257 @@ function saveSettings() {
 }
 
 // ============================================================
-// STT abstraction layer
+// Audio recorder (PCM -> WAV)
+//
+// Speech-to-text is done by Gemini on the finished recording, so all we
+// need here is clean 16 kHz mono PCM. WAV is used because it is the only
+// container we can produce that the Gemini API accepts on every browser
+// (MediaRecorder's default webm/opus is not on its supported list).
 // ============================================================
 
-function createWebSpeechSTT(lang) {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return null;
+const RECORD_SAMPLE_RATE = 16000;
+const MAX_RECORD_MS = 7 * 60 * 1000;
+const WARN_REMAINING_MS = 60 * 1000;
 
-  let recognition = null;
-  let callbacks = { onResult: null, onError: null, onEnd: null };
+function isRecordingSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (window.AudioContext || window.webkitAudioContext));
+}
 
-  function createRecognition() {
-    const rec = new SpeechRecognition();
-    rec.lang = lang;
-    rec.continuous = true;
-    rec.interimResults = true;
-    let processedFinalCount = 0;
+async function createRecorder(onLevel) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
 
-    rec.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) {
-          // Skip results we already processed as final
-          if (i < processedFinalCount) continue;
-          processedFinalCount = i + 1;
-        }
-        if (callbacks.onResult) {
-          callbacks.onResult(result[0].transcript, result.isFinal);
-        }
-      }
-    };
-
-    rec.onerror = (event) => {
-      if (event.error === 'no-speech' || event.error === 'aborted') return;
-      if (callbacks.onError) callbacks.onError(event.error);
-    };
-
-    rec.onend = () => {
-      // Chrome stops after silence timeout; auto-restart with fresh instance
-      if (voiceState.recording) {
-        // Disconnect old instance handlers to prevent late results
-        rec.onresult = null;
-        rec.onerror = null;
-        rec.onend = null;
-        recognition = createRecognition();
-        try { recognition.start(); } catch (e) { /* ignore */ }
-        return;
-      }
-      if (callbacks.onEnd) callbacks.onEnd();
-    };
-
-    return rec;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let ctx;
+  try {
+    // Ask the device to capture at our target rate so no resampling is needed.
+    ctx = new AudioCtx({ sampleRate: RECORD_SAMPLE_RATE });
+  } catch (e) {
+    ctx = new AudioCtx();
   }
 
+  const source = ctx.createMediaStreamSource(stream);
+  const chunks = [];
+  let node = null;
+
+  function collect(samples) {
+    chunks.push(samples);
+    if (onLevel) {
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+      onLevel(Math.sqrt(sum / samples.length));
+    }
+  }
+
+  if (ctx.audioWorklet) {
+    try {
+      await ctx.audioWorklet.addModule('pcm-worklet.js');
+      node = new AudioWorkletNode(ctx, 'pcm-collector');
+      node.port.onmessage = (event) => collect(event.data);
+      // A worklet is only pulled when something downstream consumes it, so
+      // route it into a muted gain rather than leaving it dangling.
+      const sink = ctx.createGain();
+      sink.gain.value = 0;
+      source.connect(node);
+      node.connect(sink);
+      sink.connect(ctx.destination);
+    } catch (e) {
+      node = null;
+    }
+  }
+
+  if (!node) {
+    // Browsers without AudioWorklet, or where the module could not be loaded.
+    node = ctx.createScriptProcessor(4096, 1, 1);
+    node.onaudioprocess = (event) => collect(new Float32Array(event.inputBuffer.getChannelData(0)));
+    source.connect(node);
+    node.connect(ctx.destination);
+  }
+
+  let stopped = false;
+
   return {
-    isSupported() { return true; },
-    start() {
-      recognition = createRecognition();
-      recognition.start();
+    context: ctx,
+    hasAudio() { return chunks.length > 0; },
+    async stop() {
+      if (stopped) return null;
+      stopped = true;
+      try {
+        if (node.port) node.port.onmessage = null;
+        node.onaudioprocess = null;
+        source.disconnect();
+        node.disconnect();
+      } catch (e) { /* already torn down */ }
+      stream.getTracks().forEach((track) => track.stop());
+      const sampleRate = ctx.sampleRate;
+      try { await ctx.close(); } catch (e) { /* ignore */ }
+      if (!chunks.length) return null;
+      return encodeWAV(mergeChunks(chunks), sampleRate);
     },
-    stop() {
-      if (recognition) recognition.stop();
+    abort() {
+      if (stopped) return;
+      stopped = true;
+      try {
+        if (node.port) node.port.onmessage = null;
+        node.onaudioprocess = null;
+        source.disconnect();
+        node.disconnect();
+      } catch (e) { /* already torn down */ }
+      stream.getTracks().forEach((track) => track.stop());
+      ctx.close().catch(() => {});
+      chunks.length = 0;
     },
-    set onResult(fn) { callbacks.onResult = fn; },
-    set onError(fn) { callbacks.onError = fn; },
-    set onEnd(fn) { callbacks.onEnd = fn; },
   };
 }
 
-function getSTTEngine() {
-  const engine = createWebSpeechSTT('ja-JP');
-  if (!engine) return null;
-  return engine;
+function mergeChunks(chunks) {
+  let total = 0;
+  for (let i = 0; i < chunks.length; i++) total += chunks[i].length;
+  const merged = new Float32Array(total);
+  let offset = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    merged.set(chunks[i], offset);
+    offset += chunks[i].length;
+  }
+  return merged;
+}
+
+// Only runs when the device refused our requested capture rate; normally the
+// browser already hands us 16 kHz. Downsampling averages over the source
+// window so content above the new Nyquist limit does not alias back into the
+// speech band, which would cost us the accuracy this whole change is for.
+function resample(samples, fromRate, toRate) {
+  if (fromRate === toRate) return samples;
+  const ratio = fromRate / toRate;
+  const outLength = Math.floor(samples.length / ratio);
+  const out = new Float32Array(outLength);
+
+  if (ratio > 1) {
+    for (let i = 0; i < outLength; i++) {
+      const start = Math.floor(i * ratio);
+      const end = Math.min(Math.floor((i + 1) * ratio), samples.length);
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += samples[j];
+      out[i] = end > start ? sum / (end - start) : samples[start];
+    }
+    return out;
+  }
+
+  for (let i = 0; i < outLength; i++) {
+    const pos = i * ratio;
+    const left = Math.floor(pos);
+    const right = Math.min(left + 1, samples.length - 1);
+    const frac = pos - left;
+    out[i] = samples[left] * (1 - frac) + samples[right] * frac;
+  }
+  return out;
+}
+
+function encodeWAV(samples, sampleRate) {
+  const pcm = resample(samples, sampleRate, RECORD_SAMPLE_RATE);
+  const buffer = new ArrayBuffer(44 + pcm.length * 2);
+  const view = new DataView(buffer);
+
+  function writeString(offset, str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + pcm.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);          // PCM chunk size
+  view.setUint16(20, 1, true);           // format: PCM
+  view.setUint16(22, 1, true);           // channels: mono
+  view.setUint32(24, RECORD_SAMPLE_RATE, true);
+  view.setUint32(28, RECORD_SAMPLE_RATE * 2, true); // byte rate
+  view.setUint16(32, 2, true);           // block align
+  view.setUint16(34, 16, true);          // bits per sample
+  writeString(36, 'data');
+  view.setUint32(40, pcm.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < pcm.length; i++) {
+    const clamped = Math.max(-1, Math.min(1, pcm[i]));
+    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    offset += 2;
+  }
+  return buffer;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const CHUNK = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
 // ============================================================
 // Gemini API client
 // ============================================================
 
-async function summarizeWithGemini(text, signal) {
+const GEMINI_MODEL = 'gemini-3.5-flash';
+
+const PROMPT_MEMO = [
+  'これは音声メモの録音です。次の手順で処理してください。',
+  '1. 音声を正確に文字起こしする',
+  '2. フィラー（えー、あの、等）と言い直しを除去し、文脈から判断して誤りを正しい表記に直す',
+  '3. 内容を "## 見出し" 1行と "- 箇条書き" に要約する',
+  '',
+  '出力は Markdown 本文のみ。前置き・後書き・コードフェンスは書かないこと。',
+  '話されている言語と同じ言語で出力すること。',
+].join('\n');
+
+const PROMPT_APPEND = [
+  'これは音声メモの録音です。音声を正確に文字起こししてください。',
+  'フィラー（えー、あの、等）と言い直しは除去し、適切に句読点を打つこと。',
+  '文脈から判断して誤りを正しい表記に直すこと。',
+  '要約・見出しの追加はせず、話された内容をそのまま書き起こすこと。',
+  '',
+  '出力は本文のみ。前置き・後書き・コードフェンスは書かないこと。',
+  '話されている言語と同じ言語で出力すること。',
+].join('\n');
+
+// Strip markdown fences and conversational lead-ins the model sometimes adds
+// despite being told not to.
+function cleanAiOutput(text) {
+  let out = text.trim();
+  const fenced = out.match(/^```(?:[a-zA-Z]*)\n([\s\S]*?)\n?```$/);
+  if (fenced) out = fenced[1].trim();
+  out = out.replace(/^(承知しました|了解しました|わかりました|はい)[^\n]*\n+/, '');
+  out = out.replace(/^(以下|次)[^\n]*(です|ます)[:：]?\n+/, '');
+  return out.trim();
+}
+
+async function transcribeWithGemini(base64Wav, mode, signal) {
   if (!settings.geminiApiKey) {
     throw new Error('API key not configured. Open Settings to add your Gemini API key.');
   }
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=' + encodeURIComponent(settings.geminiApiKey);
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL +
+    ':generateContent?key=' + encodeURIComponent(settings.geminiApiKey);
 
-  const prompt = 'Summarize the following voice transcription into a single heading (## format) and bullet points (- format). Output only Markdown, no extra explanation. Write the summary in the same language as the transcription.\n\n' + text;
+  const prompt = mode === 'append' ? PROMPT_APPEND : PROMPT_MEMO;
 
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: 'audio/wav', data: base64Wav } },
+        ],
+      }],
     }),
     signal,
   });
@@ -314,6 +477,9 @@ async function summarizeWithGemini(text, signal) {
   if (!res.ok) {
     if (res.status === 400 || res.status === 403) {
       throw new Error('Invalid API key. Please check your key in Settings.');
+    }
+    if (res.status === 413) {
+      throw new Error('Recording too long to send. Try a shorter memo.');
     }
     if (res.status === 429) {
       throw new Error('Rate limit exceeded. Please wait a moment and try again.');
@@ -327,7 +493,9 @@ async function summarizeWithGemini(text, signal) {
     throw new Error('Unexpected API response format.');
   }
 
-  return candidate.content.parts.map((p) => p.text).join('');
+  const text = cleanAiOutput(candidate.content.parts.map((p) => p.text || '').join(''));
+  if (!text) throw new Error('No speech could be transcribed.');
+  return text;
 }
 
 // ============================================================
@@ -2012,252 +2180,284 @@ importFileInput.addEventListener('change', () => {
 // Voice Memo
 // ============================================================
 
+// Audio kept around after a failed transcription so the user can retry
+// without having to say it all over again.
+let pendingVoiceAudio = null;
+
 function startVoiceMemo() {
-  // Check API key
+  beginRecording(false, null);
+}
+
+function startVoiceAppend() {
+  const targetId = currentNoteId;
+  if (!targetId) return;
+  beginRecording(true, targetId);
+}
+
+async function beginRecording(appendMode, targetId) {
+  if (voiceState.recording) return;
+
   if (!settings.geminiApiKey) {
     showToast('Set your Gemini API key in Settings first', 'warning', 4000);
     return;
   }
-
-  // Check STT support
-  const engine = getSTTEngine();
-  if (!engine) {
+  if (!isRecordingSupported()) {
     showToast('Voice input is not supported in this browser', 'danger', 4000);
     return;
   }
 
-  // Reset state
-  voiceState.finalSegments = [];
-  voiceState.recording = true;
-  voiceState.cancelled = false;
-  voiceState.engine = engine;
-  voiceState.abortController = null;
-  voiceState.appendMode = false;
-  voiceState.appendTargetId = null;
-  voiceContext.hidden = true;
-  voiceStatusLabel.textContent = 'Recording...';
-  voiceTranscript.textContent = '';
-  voiceStatus.hidden = false;
-  voiceProcessing.hidden = true;
-  voiceStopBtn.hidden = false;
-  voiceCancelBtn.hidden = false;
-  voiceOverlay.hidden = false;
-
-  engine.onResult = (text, isFinal) => {
-    if (voiceState.cancelled) return;
-    if (isFinal) {
-      // Dedup: skip if same text as last segment
-      const segments = voiceState.finalSegments;
-      if (segments.length === 0 || segments[segments.length - 1] !== text) {
-        voiceState.finalSegments.push(text);
-      }
+  if (appendMode) {
+    const note = data.notes.find((n) => n.id === targetId);
+    if (note) {
+      voiceContext.textContent = note.title || note.body.substring(0, 30) || 'Untitled';
+      voiceContext.hidden = false;
     }
-    renderTranscript(text, isFinal);
-  };
-
-  engine.onError = (error) => {
-    showToast('Voice error: ' + error, 'danger', 4000);
-    stopVoiceMemo();
-  };
-
-  engine.onEnd = () => {
-    if (!voiceState.recording) {
-      processVoiceResult();
-    }
-  };
-
-  engine.start();
-}
-
-function startVoiceAppend() {
-  // Check STT support
-  const engine = getSTTEngine();
-  if (!engine) {
-    showToast('Voice input is not supported in this browser', 'danger', 4000);
-    return;
+  } else {
+    voiceContext.hidden = true;
   }
 
-  // Capture the target note ID before showing overlay
-  const targetId = currentNoteId;
-  if (!targetId) return;
-
-  // Show context label with note title
-  const note = data.notes.find((n) => n.id === targetId);
-  if (note) {
-    voiceContext.textContent = note.title || note.body.substring(0, 30) || 'Untitled';
-    voiceContext.hidden = false;
-  }
-
-  // Reset state
-  voiceState.finalSegments = [];
   voiceState.recording = true;
   voiceState.cancelled = false;
-  voiceState.engine = engine;
-  voiceState.abortController = null;
-  voiceState.appendMode = true;
+  voiceState.appendMode = appendMode;
   voiceState.appendTargetId = targetId;
-  voiceTranscript.textContent = '';
+  voiceState.abortController = null;
+
+  voiceStatusLabel.textContent = appendMode ? 'Appending...' : 'Recording...';
+  voiceTimer.textContent = '0:00';
+  voiceTimer.classList.remove('voice-overlay__timer--warn');
+  voiceHint.hidden = true;
+  setMeterLevel(0);
   voiceStatus.hidden = false;
-  voiceStatusLabel.textContent = 'Appending...';
   voiceProcessing.hidden = true;
   voiceStopBtn.hidden = false;
   voiceCancelBtn.hidden = false;
   voiceOverlay.hidden = false;
 
-  engine.onResult = (text, isFinal) => {
-    if (voiceState.cancelled) return;
-    if (isFinal) {
-      const segments = voiceState.finalSegments;
-      if (segments.length === 0 || segments[segments.length - 1] !== text) {
-        voiceState.finalSegments.push(text);
-      }
-    }
-    renderTranscript(text, isFinal);
-  };
+  let recorder;
+  try {
+    recorder = await createRecorder(setMeterLevel);
+  } catch (e) {
+    closeVoiceOverlay();
+    resetVoiceState();
+    showToast(micErrorMessage(e), 'danger', 4000);
+    return;
+  }
 
-  engine.onError = (error) => {
-    showToast('Voice error: ' + error, 'danger', 4000);
+  // Cancelled while the permission prompt was still up
+  if (!voiceState.recording || voiceState.cancelled) {
+    recorder.abort();
+    return;
+  }
+
+  voiceState.recorder = recorder;
+  voiceState.startedAt = Date.now();
+  voiceState.tickerId = setInterval(updateRecordingTimer, 250);
+  voiceState.autoStopId = setTimeout(() => {
+    showToast('Reached the 7 minute limit', 'warning', 3000);
     stopVoiceMemo();
-  };
+  }, MAX_RECORD_MS);
 
-  engine.onEnd = () => {
-    if (!voiceState.recording) {
-      processVoiceResult();
-    }
+  // A screen lock or an incoming call can suspend the audio context.
+  recorder.context.onstatechange = () => {
+    if (!voiceState.recording || recorder.context.state !== 'suspended') return;
+    recorder.context.resume().catch(() => {
+      voiceHint.textContent = 'Recording was paused by the system. Tap stop to keep what was captured.';
+      voiceHint.hidden = false;
+    });
   };
-
-  engine.start();
 }
 
-function renderTranscript(interimText, isFinal) {
-  // Clear and rebuild: finalized text in white, interim in grey
-  voiceTranscript.textContent = '';
-
-  if (getFinalizedText()) {
-    const finalSpan = document.createElement('span');
-    finalSpan.className = 'voice-overlay__text--final';
-    finalSpan.textContent = getFinalizedText();
-    voiceTranscript.appendChild(finalSpan);
+function micErrorMessage(e) {
+  if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
+    return 'Microphone permission denied';
   }
-
-  if (!isFinal && interimText) {
-    const interimSpan = document.createElement('span');
-    interimSpan.className = 'voice-overlay__text--interim';
-    interimSpan.textContent = interimText;
-    voiceTranscript.appendChild(interimSpan);
+  if (e && e.name === 'NotFoundError') {
+    return 'No microphone found';
   }
-
-  // Auto-scroll to bottom
-  voiceTranscript.scrollTop = voiceTranscript.scrollHeight;
+  return 'Could not start recording: ' + ((e && e.message) || 'unknown error');
 }
 
-function stopVoiceMemo() {
+// The worklet delivers a block every ~8 ms; repaint at most once per frame.
+let meterLevel = 0;
+let meterFrameId = null;
+
+function setMeterLevel(rms) {
+  meterLevel = rms;
+  if (meterFrameId !== null) return;
+  meterFrameId = requestAnimationFrame(() => {
+    meterFrameId = null;
+    // Speech RMS is small; the square root spreads it over a visible range.
+    voiceMeterFill.style.width = Math.min(100, Math.round(Math.sqrt(meterLevel) * 180)) + '%';
+  });
+}
+
+function updateRecordingTimer() {
+  const elapsed = Date.now() - voiceState.startedAt;
+  const seconds = Math.floor(elapsed / 1000);
+  voiceTimer.textContent = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+  if (MAX_RECORD_MS - elapsed <= WARN_REMAINING_MS) {
+    voiceTimer.classList.add('voice-overlay__timer--warn');
+  }
+}
+
+function closeVoiceOverlay() {
+  voiceOverlay.hidden = true;
+  voiceContext.hidden = true;
+  voiceProcessing.hidden = true;
+  voiceHint.hidden = true;
+  voiceStatus.hidden = false;
+  voiceStopBtn.hidden = false;
+  voiceCancelBtn.hidden = false;
+  voiceStatusLabel.textContent = 'Recording...';
+  voiceTimer.classList.remove('voice-overlay__timer--warn');
+  setMeterLevel(0);
+}
+
+async function stopVoiceMemo() {
+  if (!voiceState.recording) return;
   voiceState.recording = false;
-  if (voiceState.engine) {
-    voiceState.engine.stop();
+
+  if (voiceState.tickerId) {
+    clearInterval(voiceState.tickerId);
+    voiceState.tickerId = null;
   }
+  if (voiceState.autoStopId) {
+    clearTimeout(voiceState.autoStopId);
+    voiceState.autoStopId = null;
+  }
+
+  const recorder = voiceState.recorder;
+  if (!recorder) {
+    // Stopped before the microphone finished opening
+    closeVoiceOverlay();
+    resetVoiceState();
+    return;
+  }
+
+  setMeterLevel(0);
+  let wav = null;
+  try {
+    wav = await recorder.stop();
+  } catch (e) {
+    wav = null;
+  }
+  voiceState.recorder = null;
+
+  await processVoiceResult(wav, voiceState.appendMode, voiceState.appendTargetId);
 }
 
 function cancelVoiceMemo() {
   voiceState.cancelled = true;
   voiceState.recording = false;
-  if (voiceState.engine) {
-    voiceState.engine.stop();
-  }
-  if (voiceState.abortController) {
-    voiceState.abortController.abort();
-  }
-  voiceOverlay.hidden = true;
-  voiceContext.hidden = true;
-  voiceStatusLabel.textContent = 'Recording...';
+  if (voiceState.recorder) voiceState.recorder.abort();
+  if (voiceState.abortController) voiceState.abortController.abort();
+  pendingVoiceAudio = null;
+  closeVoiceOverlay();
   resetVoiceState();
 }
 
-async function processVoiceResult() {
+async function processVoiceResult(wavBuffer, appendMode, targetId) {
   if (voiceState.cancelled) {
-    voiceOverlay.hidden = true;
+    closeVoiceOverlay();
     resetVoiceState();
     return;
   }
-  if (!getFinalizedText().trim()) {
-    voiceOverlay.hidden = true;
-    voiceContext.hidden = true;
-    voiceStatusLabel.textContent = 'Recording...';
-    voiceState.engine = null;
+
+  // 44 bytes is a WAV header with no samples behind it
+  if (!wavBuffer || wavBuffer.byteLength <= 44) {
+    closeVoiceOverlay();
+    resetVoiceState();
     showToast('No speech detected', 'warning', 3000);
     return;
   }
 
-  // Hide recording controls
+  if (!navigator.onLine) {
+    keepAudioForRetry(wavBuffer, appendMode, targetId);
+    closeVoiceOverlay();
+    resetVoiceState();
+    showToast('Offline — transcription needs a connection', 'danger', 5000, 'Retry', retryVoiceTranscription);
+    return;
+  }
+
+  // Switch from recording controls to the processing spinner. Cancel stays
+  // available: uploading audio takes longer than the old text request did,
+  // and a modal with no way out would be a trap on a slow connection.
   voiceStatus.hidden = true;
   voiceStopBtn.hidden = true;
-  voiceCancelBtn.hidden = true;
+  voiceHint.hidden = true;
+  voiceCancelBtn.hidden = false;
+  voiceProcessing.hidden = false;
+  voiceOverlay.hidden = false;
 
-  // --- Append mode: skip Gemini, insert raw text ---
-  if (voiceState.appendMode) {
-    const targetId = voiceState.appendTargetId;
-    const targetNote = data.notes.find((n) => n.id === targetId);
-    voiceOverlay.hidden = true;
-    voiceContext.hidden = true;
-    voiceStatusLabel.textContent = 'Recording...';
-    voiceState.engine = null;
-
-    if (targetNote) {
-      const appendText = getFinalizedText();
-      const separator = targetNote.body.trim() ? '\n\n' : '';
-      targetNote.body += separator + appendText;
-      targetNote.updatedAt = new Date().toISOString();
-      saveData();
-
-      if (currentNoteId === targetId) {
-        editorTextarea.value = targetNote.body;
-        editorTextarea.scrollTop = editorTextarea.scrollHeight;
-        editorTextarea.selectionStart = editorTextarea.value.length;
-        editorTextarea.selectionEnd = editorTextarea.value.length;
-        editorTextarea.focus();
-        flashSaveIndicator();
-      }
-      showToast('Text appended', 'success', 2000);
+  let text;
+  try {
+    voiceState.abortController = new AbortController();
+    text = await transcribeWithGemini(
+      arrayBufferToBase64(wavBuffer),
+      appendMode ? 'append' : 'memo',
+      voiceState.abortController.signal
+    );
+  } catch (e) {
+    // cancelVoiceMemo() has already cleaned up and reset the flag by the time
+    // the aborted fetch rejects, so key off the error itself.
+    if (voiceState.cancelled || (e && e.name === 'AbortError')) {
+      closeVoiceOverlay();
+      resetVoiceState();
+      return;
     }
+    // Hold on to the recording so a rate limit or a flaky network does not
+    // throw away what the user just said.
+    keepAudioForRetry(wavBuffer, appendMode, targetId);
+    closeVoiceOverlay();
+    resetVoiceState();
+    showToast(e.message || 'Transcription failed', 'danger', 6000, 'Retry', retryVoiceTranscription);
+    return;
+  }
+
+  if (voiceState.cancelled) {
+    closeVoiceOverlay();
     resetVoiceState();
     return;
   }
 
-  // --- New memo mode: show processing UI and summarize ---
-  voiceProcessing.hidden = false;
+  pendingVoiceAudio = null;
+  closeVoiceOverlay();
+  resetVoiceState();
 
-  let title = '';
-  let body = '';
+  if (appendMode) {
+    const targetNote = data.notes.find((n) => n.id === targetId);
+    if (!targetNote) return;
 
-  try {
-    voiceState.abortController = new AbortController();
-    const summary = await summarizeWithGemini(getFinalizedText(), voiceState.abortController.signal);
-    if (voiceState.cancelled) {
-      resetVoiceState();
-      return;
+    const separator = targetNote.body.trim() ? '\n\n' : '';
+    targetNote.body += separator + text;
+    targetNote.updatedAt = new Date().toISOString();
+    saveData();
+
+    if (currentNoteId === targetId) {
+      editorTextarea.value = targetNote.body;
+      editorTextarea.scrollTop = editorTextarea.scrollHeight;
+      editorTextarea.selectionStart = editorTextarea.value.length;
+      editorTextarea.selectionEnd = editorTextarea.value.length;
+      editorTextarea.focus();
+      flashSaveIndicator();
     }
-    // Parse: first ## heading line → title, rest → body
-    const lines = summary.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const headingMatch = lines[i].match(/^##\s+(.+)/);
-      if (headingMatch && !title) {
-        title = headingMatch[1].trim();
-      } else {
-        body += lines[i] + '\n';
-      }
-    }
-    body = body.trim();
-  } catch (e) {
-    // Fallback: use raw text
-    showToast(e.message || 'Summarization failed. Saving raw text.', 'warning', 4000);
-    title = '';
-    body = getFinalizedText();
+    showToast('Text appended', 'success', 2000);
+    return;
   }
 
-  voiceOverlay.hidden = true;
-  voiceContext.hidden = true;
-  voiceStatusLabel.textContent = 'Recording...';
-  voiceState.engine = null;
+  // Parse: first ## heading line → title, rest → body
+  let title = '';
+  let body = '';
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const headingMatch = lines[i].match(/^##\s+(.+)/);
+    if (headingMatch && !title) {
+      title = headingMatch[1].trim();
+    } else {
+      body += lines[i] + '\n';
+    }
+  }
+  body = body.trim();
 
   // Create new memo and open editor
   const now = new Date().toISOString();
@@ -2275,6 +2475,27 @@ async function processVoiceResult() {
   data.notes.push(note);
   saveData();
   openEditor(note.id);
+}
+
+function keepAudioForRetry(wavBuffer, appendMode, targetId) {
+  pendingVoiceAudio = { buffer: wavBuffer, appendMode: appendMode, targetId: targetId };
+}
+
+function retryVoiceTranscription() {
+  if (!pendingVoiceAudio) return;
+  const pending = pendingVoiceAudio;
+  pendingVoiceAudio = null;
+
+  // Append target may have been deleted while the toast was up
+  if (pending.appendMode && !data.notes.find((n) => n.id === pending.targetId)) {
+    showToast('The memo to append to is gone', 'warning', 3000);
+    return;
+  }
+
+  voiceState.cancelled = false;
+  voiceState.appendMode = pending.appendMode;
+  voiceState.appendTargetId = pending.targetId;
+  processVoiceResult(pending.buffer, pending.appendMode, pending.targetId);
 }
 
 voiceFab.addEventListener('click', () => {
